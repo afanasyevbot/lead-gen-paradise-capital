@@ -1,0 +1,11 @@
+node_modules/
+.next/
+*.db
+data/
+leads.db
+paradise.db
+paradise_leads.db
+tsconfig.tsbuildinfo
+test-scraper.mjs
+.claude/
+docs/

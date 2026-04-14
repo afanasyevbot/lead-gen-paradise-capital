@@ -1,0 +1,516 @@
+"use client";
+
+import { useState, useEffect, useRef } from "react";
+
+interface Job {
+  id: string;
+  status: "running" | "completed" | "failed";
+  progress: { current: number; total: number; stage: string; currentItem: string };
+  result?: Record<string, number>;
+  error?: string;
+  startedAt?: string;
+}
+
+interface PipelineSummary {
+  pipeline: { total: number; pending: number; scraped: number; enriched: number; scored: number; outreach_generated: number; filtered_out: number; failed: number };
+  highlights: { high_score_leads: number; emails_found: number; ready_to_push: number };
+  score_distribution: { legacy_tier: number; high_tier: number; seed_tier: number; below_threshold: number };
+  this_run_scores: { score_8_plus: number; score_7: number; score_5_6: number; score_below_5: number; total_scored: number; filtered_out: number } | null;
+  cost: { total_usd: number; by_stage: Record<string, number>; leads_billed: number };
+}
+
+const CORE_STAGES = [
+  { key: "scrape-websites", label: "Websites", desc: "Scrape lead websites" },
+  { key: "linkedin", label: "LinkedIn", desc: "Find owner profiles" },
+  { key: "extract", label: "Extract", desc: "Founder + age + revenue signals" },
+  { key: "score", label: "Score", desc: "Avatar fit scoring" },
+  { key: "emails", label: "Emails", desc: "Find founder emails" },
+  { key: "outreach", label: "Outreach", desc: "Tiered emails for Paul" },
+];
+
+const ENRICH_STAGES = [
+  { key: "extract", label: "Extract", desc: "Founder + age + revenue signals" },
+  { key: "score", label: "Score", desc: "Avatar fit scoring" },
+  { key: "emails", label: "Emails", desc: "Find founder emails" },
+  { key: "outreach", label: "Outreach", desc: "Tiered emails for Paul" },
+];
+
+type PipelineMode = "core" | "enrich-only";
+
+const PIPELINE_CONFIGS: { key: PipelineMode; label: string; desc: string; endpoint: string; stages: typeof CORE_STAGES }[] = [
+  {
+    key: "core",
+    label: "Full Pipeline (6 stages)",
+    desc: "Scrape websites → LinkedIn → Extract → Score → Emails → Outreach",
+    endpoint: "/api/pipeline",
+    stages: CORE_STAGES,
+  },
+  {
+    key: "enrich-only",
+    label: "Enrich Only (4 stages)",
+    desc: "Skip scraping — extract, score, find emails & write outreach for already-scraped leads",
+    endpoint: "/api/enrich-only",
+    stages: ENRICH_STAGES,
+  },
+];
+
+function StageBox({ stage, isActive, isDone }: { stage: { key: string; label: string; desc: string }; isActive: boolean; isDone: boolean }) {
+  return (
+    <div
+      className={`p-3 rounded-lg border text-center text-xs ${
+        isActive
+          ? "border-[var(--accent)] bg-blue-950"
+          : isDone
+          ? "border-green-800 bg-green-950"
+          : "border-[var(--border)] bg-[var(--card)]"
+      }`}
+    >
+      <p className="font-semibold text-sm">{stage.label}</p>
+      <p className="text-[var(--muted)] text-[10px] mt-0.5">{stage.desc}</p>
+      {isActive && <p className="text-[var(--accent)] mt-1 animate-pulse text-[10px]">Running...</p>}
+      {isDone && <p className="text-green-400 mt-1 text-[10px]">Done</p>}
+    </div>
+  );
+}
+
+export default function PipelinePage() {
+  const [job, setJob] = useState<Job | null>(null);
+  const [running, setRunning] = useState(false);
+  const [limit, setLimit] = useState(50);
+  const [minScore, setMinScore] = useState(5);
+  const [mode, setMode] = useState<PipelineMode>("core");
+  const [summary, setSummary] = useState<PipelineSummary | null>(null);
+  const [xrayReset, setXrayReset] = useState<number | null>(null);
+  const [lockError, setLockError] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  async function resetXrayLeads() {
+    const r = await fetch("/api/leads?action=reset-xray", { method: "PATCH" });
+    const { reset } = await r.json();
+    setXrayReset(reset);
+  }
+
+  const config = PIPELINE_CONFIGS.find((c) => c.key === mode)!;
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
+  async function runPipeline() {
+    setRunning(true);
+    setJob(null);
+    setSummary(null);
+
+    const res = await fetch(config.endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limit, minScore }),
+    });
+    const body = await res.json();
+
+    if (!res.ok) {
+      setRunning(false);
+      const msg = body?.error ?? `Error ${res.status}`;
+      if (res.status === 409) setLockError(msg);
+      setJob({ id: "", status: "failed", progress: { current: 0, total: 0, stage: "", currentItem: "" }, error: msg, startedAt: undefined });
+      return;
+    }
+    setLockError(null);
+
+    const { jobId } = body;
+
+    pollRef.current = setInterval(async () => {
+      const r = await fetch(`/api/jobs/${jobId}`);
+      if (!r.ok) {
+        // Job not found or server error — stop polling gracefully
+        if (pollRef.current) clearInterval(pollRef.current);
+        setRunning(false);
+        return;
+      }
+      const j: Job = await r.json();
+      setJob(j);
+      if (j.status !== "running") {
+        if (pollRef.current) clearInterval(pollRef.current);
+        setRunning(false);
+        // Fetch meaningful summary after completion — pass job start time for cost scoping
+        fetch(`/api/pipeline/summary?since=${encodeURIComponent(j.startedAt ?? "")}`)
+          .then((r) => r.json())
+          .then(setSummary)
+          .catch(() => {});
+      }
+    }, 2000);
+  }
+
+  const activeStageIdx = job?.progress.stage
+    ? config.stages.findIndex((s) => {
+        const stageText = job.progress.stage.toLowerCase();
+        const keyBase = s.key.split("-")[0];
+        // Match "emails" key to "Finding founder emails" stage text
+        return stageText.includes(keyBase) || (keyBase === "emails" && stageText.includes("email"));
+      })
+    : -1;
+
+  return (
+    <div className="max-w-3xl">
+      <h1 className="text-2xl font-bold mb-2">Enrichment Pipeline</h1>
+      <p className="text-sm text-[var(--muted)] mb-6">
+        Find founders matching Paul&apos;s avatar: original founder, 60s, $5-50M revenue, people of faith.
+      </p>
+
+      {/* Pipeline mode selector */}
+      <div className="grid grid-cols-2 gap-3 mb-6">
+        {PIPELINE_CONFIGS.map((pc) => (
+          <button
+            key={pc.key}
+            onClick={() => !running && setMode(pc.key)}
+            disabled={running}
+            className={`p-4 rounded-lg border text-left text-sm transition-colors ${
+              mode === pc.key
+                ? "border-[var(--accent)] bg-blue-950"
+                : "border-[var(--border)] bg-[var(--card)] hover:border-[#555]"
+            } disabled:opacity-50`}
+          >
+            <p className="font-semibold">{pc.label}</p>
+            <p className="text-xs text-[var(--muted)] mt-1">{pc.desc}</p>
+          </button>
+        ))}
+      </div>
+
+      {/* Stage visualization */}
+      <div className="flex gap-2 mb-6">
+        {config.stages.map((stage, i) => (
+          <div key={stage.key} className="flex-1 relative">
+            <StageBox
+              stage={stage}
+              isActive={running && i === activeStageIdx}
+              isDone={job?.status === "completed" || (running && i < activeStageIdx)}
+            />
+            {i < config.stages.length - 1 && (
+              <div className="absolute right-[-10px] top-1/2 -translate-y-1/2 text-[var(--muted)] text-xs z-10">&rarr;</div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {/* Info box when no job has run */}
+      {!job && !running && (
+        <div className="bg-blue-950/30 border border-blue-900/40 rounded-xl p-4 mb-6 text-sm">
+          <p className="font-medium text-[var(--fg)] mb-2">How it works</p>
+          <ul className="text-[var(--muted)] space-y-1 text-xs">
+            <li><strong>Website Scrape</strong> &mdash; pulls homepage + about page text (free, no API cost)</li>
+            <li><strong>LinkedIn</strong> &mdash; finds owner profile via Google search (free, confirms founder title)</li>
+            <li><strong>Extract</strong> &mdash; AI reads website + LinkedIn to detect founder status, age, revenue, faith signals</li>
+            <li><strong>Emails</strong> &mdash; finds founder emails from website data + Apollo.io API</li>
+            <li><strong>Score</strong> &mdash; AI scores against Paul&apos;s avatar (founder gate, age 60s, $5-50M revenue)</li>
+            <li><strong>Outreach</strong> &mdash; AI writes tiered emails in Paul&apos;s voice (Legacy for 7+, Seed Planter for 5-6)</li>
+          </ul>
+          <div className="flex gap-3 mt-3 flex-wrap items-center">
+            <a href="/scrape" className="text-[var(--accent)] hover:underline text-xs">Scrape leads &rarr;</a>
+            <a href="/upload" className="text-[var(--accent)] hover:underline text-xs">Upload CSV &rarr;</a>
+          </div>
+          <div className="flex gap-3 mt-3 flex-wrap items-center">
+            <button
+              onClick={async () => { const r = await fetch("/api/leads?action=reset-all-failed", { method: "PATCH" }); const d = await r.json(); setXrayReset(d.reset); }}
+              className="px-3 py-1.5 bg-red-900/50 text-red-300 border border-red-700/50 rounded-lg text-xs font-medium hover:bg-red-900"
+            >
+              Re-run all failed
+            </button>
+            <span className="text-[var(--muted)] text-xs">or individually:</span>
+            <button
+              onClick={async () => { const r = await fetch("/api/leads?action=reset-xray", { method: "PATCH" }); const d = await r.json(); setXrayReset(d.reset); }}
+              className="text-yellow-400 hover:underline text-xs"
+            >X-Ray</button>
+            <button
+              onClick={async () => { const r = await fetch("/api/leads?action=reset-scrape-failed", { method: "PATCH" }); const d = await r.json(); setXrayReset(d.reset); }}
+              className="text-orange-400 hover:underline text-xs"
+            >Scrape failed</button>
+            <button
+              onClick={async () => { const r = await fetch("/api/leads?action=reset-enrich-failed", { method: "PATCH" }); const d = await r.json(); setXrayReset(d.reset); }}
+              className="text-red-400 hover:underline text-xs"
+            >Extract failed</button>
+            {xrayReset !== null && (
+              <span className="text-green-400 text-xs">{xrayReset} leads re-queued ✓</span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Controls */}
+      <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-6 space-y-4 mb-6">
+        <div className="flex gap-4">
+          <div className="flex-1">
+            <label className="block text-sm text-[var(--muted)] mb-1">Leads per stage</label>
+            <input
+              type="number"
+              value={limit}
+              onChange={(e) => setLimit(Number(e.target.value))}
+              className="w-full px-3 py-2 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-sm"
+              disabled={running}
+            />
+          </div>
+          <div className="flex-1">
+            <label className="block text-sm text-[var(--muted)] mb-1">Min score for outreach</label>
+            <input
+              type="number"
+              value={minScore}
+              onChange={(e) => setMinScore(Number(e.target.value))}
+              min={1}
+              max={10}
+              className="w-full px-3 py-2 bg-[var(--bg)] border border-[var(--border)] rounded-lg text-sm"
+              disabled={running}
+            />
+          </div>
+        </div>
+
+        {lockError && (
+          <div className="bg-red-950/40 border border-red-800/40 rounded-lg p-3 text-sm">
+            <p className="text-red-300 mb-2">{lockError}</p>
+            <button
+              onClick={async () => {
+                await fetch("/api/pipeline", { method: "DELETE" });
+                setLockError(null);
+              }}
+              className="px-3 py-1.5 bg-red-800 hover:bg-red-700 text-white rounded text-xs font-medium"
+            >
+              Force Clear Lock &amp; Try Again
+            </button>
+          </div>
+        )}
+
+        <button
+          onClick={runPipeline}
+          disabled={running}
+          className="w-full px-4 py-3 bg-[var(--accent)] text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50"
+        >
+          {running ? "Pipeline Running..." : `Run ${config.label}`}
+        </button>
+
+        <p className="text-xs text-[var(--muted)] text-center">
+          ~3 AI calls per lead + email lookup &bull; {mode === "core" ? "Website + LinkedIn scraping included" : "Skips scraping, processes already-scraped leads"}
+        </p>
+      </div>
+
+      {/* Progress */}
+      {job && (
+        <div className="bg-[var(--card)] border border-[var(--border)] rounded-xl p-6">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold">
+              {job.status === "running" ? job.progress.stage : job.status === "completed" ? "Pipeline Complete!" : "Pipeline Failed"}
+            </h2>
+            <span className={`text-xs px-2 py-0.5 rounded ${
+              job.status === "running" ? "bg-blue-900 text-blue-300" :
+              job.status === "completed" ? "bg-green-900 text-green-300" :
+              "bg-red-900 text-red-300"
+            }`}>
+              {job.status}
+            </span>
+          </div>
+
+          {job.status === "running" && (
+            <>
+              {job.progress.total > 0 && (
+                <div className="w-full bg-[var(--border)] rounded-full h-1.5 mb-2">
+                  <div
+                    className="bg-[var(--accent)] h-1.5 rounded-full transition-all"
+                    style={{ width: `${(job.progress.current / job.progress.total) * 100}%` }}
+                  />
+                </div>
+              )}
+              {job.progress.currentItem && (
+                <p className="text-xs text-[var(--muted)] mb-2">
+                  Processing: {job.progress.currentItem}
+                </p>
+              )}
+            </>
+          )}
+
+          {job.status === "completed" && job.result && (
+            <div className="mt-4 space-y-4">
+              {/* This Run */}
+              {(() => {
+                const totalAttempted =
+                  (job.result.pre_filter_passed ?? 0) + (job.result.pre_filter_rejected ?? 0) +
+                  (job.result.icp_matched ?? 0) + (job.result.icp_rejected ?? 0) +
+                  (job.result.websites_scraped ?? 0) + (job.result.websites_failed ?? 0) +
+                  (job.result.xray_websites_found ?? 0) + (job.result.xray_linkedin_only ?? 0) +
+                  (job.result.enriched ?? 0) + (job.result.enrich_failed ?? 0) +
+                  (job.result.scored ?? 0) + (job.result.score_failed ?? 0) +
+                  (job.result.emails_found ?? 0) + (job.result.emails_not_found ?? 0) +
+                  (job.result.outreach_generated ?? 0) + (job.result.outreach_skipped ?? 0);
+                if (totalAttempted === 0) {
+                  return (
+                    <div className="bg-yellow-950/40 border border-yellow-800/40 rounded-lg p-4 text-sm">
+                      <p className="font-medium text-yellow-300 mb-1">No leads found to process</p>
+                      <p className="text-[var(--muted)] text-xs mb-3">
+                        Every stage found 0 leads in the right status. Check the Leads page for current statuses, or re-queue failed leads below.
+                      </p>
+                      <div className="flex gap-3">
+                        <a href="/scrape" className="text-[var(--accent)] hover:underline text-xs">Scrape new leads &rarr;</a>
+                        <a href="/upload" className="text-[var(--accent)] hover:underline text-xs">Upload a CSV &rarr;</a>
+                        <a href="/leads" className="text-[var(--accent)] hover:underline text-xs">View existing leads &rarr;</a>
+                      </div>
+                    </div>
+                  );
+                }
+                return (
+                  <div className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3">
+                    <p className="text-xs font-semibold text-[var(--muted)] mb-2 uppercase tracking-wide">This Run</p>
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
+                      {(job.result.pre_filter_rejected ?? 0) > 0 && (
+                        <div className="flex justify-between"><span className="text-[var(--muted)]">Pre-filtered (chains/wrong industry)</span><span>{job.result.pre_filter_rejected}</span></div>
+                      )}
+                      {(job.result.icp_rejected ?? 0) > 0 && (
+                        <div className="flex justify-between"><span className="text-yellow-500">ICP screen rejected</span><span>{job.result.icp_rejected}</span></div>
+                      )}
+                      {(job.result.icp_matched ?? 0) > 0 && (
+                        <div className="flex justify-between"><span className="text-green-400">ICP screen passed</span><span>{job.result.icp_matched}</span></div>
+                      )}
+                      {(job.result.xray_websites_found ?? 0) > 0 && (
+                        <div className="flex justify-between"><span className="text-green-400">X-Ray websites discovered</span><span>{job.result.xray_websites_found}</span></div>
+                      )}
+                      {(job.result.xray_linkedin_only ?? 0) > 0 && (
+                        <div className="flex justify-between"><span className="text-yellow-400">X-Ray LinkedIn only</span><span>{job.result.xray_linkedin_only}</span></div>
+                      )}
+                      {(job.result.websites_scraped ?? 0) > 0 && (
+                        <div className="flex justify-between"><span className="text-[var(--muted)]">Websites scraped</span><span>{job.result.websites_scraped}</span></div>
+                      )}
+                      {(job.result.enriched ?? 0) > 0 && (
+                        <div className="flex justify-between"><span className="text-[var(--muted)]">Extracted</span><span>{job.result.enriched}</span></div>
+                      )}
+                      {(job.result.enrich_failed ?? 0) > 0 && (
+                        <div className="flex justify-between"><span className="text-red-400">Extract failed</span><span>{job.result.enrich_failed}</span></div>
+                      )}
+                      {(job.result.scored ?? 0) > 0 && (
+                        <div className="flex justify-between"><span className="text-[var(--muted)]">Scored</span><span>{job.result.scored}</span></div>
+                      )}
+                      {(job.result.leads_processed ?? 0) > 0 && (
+                        <div className="flex justify-between"><span className="text-[var(--muted)]">Emails checked</span><span>{job.result.leads_processed}</span></div>
+                      )}
+                      {(job.result.emails_found ?? 0) > 0 && (
+                        <div className="flex justify-between"><span className="text-green-400">Emails found</span><span>{job.result.emails_found}</span></div>
+                      )}
+                      {(job.result.emails_not_found ?? 0) > 0 && (
+                        <div className="flex justify-between"><span className="text-yellow-400">Emails not found</span><span>{job.result.emails_not_found}</span></div>
+                      )}
+                      {(job.result.outreach_generated ?? 0) > 0 && (
+                        <div className="flex justify-between"><span className="text-green-400">Outreach written</span><span>{job.result.outreach_generated}</span></div>
+                      )}
+                      {(job.result.outreach_skipped ?? 0) > 0 && (
+                        <div className="flex justify-between"><span className="text-[var(--muted)]">Skipped (low score)</span><span>{job.result.outreach_skipped}</span></div>
+                      )}
+                      {(job.result.websites_failed ?? 0) + (job.result.score_failed ?? 0) > 0 && (
+                        <div className="flex justify-between"><span className="text-red-400">Other failures</span>
+                          <span>{(job.result.websites_failed || 0) + (job.result.score_failed || 0)}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Score breakdown for this run */}
+              {summary?.this_run_scores && summary.this_run_scores.total_scored > 0 && (
+                <div className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3">
+                  <p className="text-xs font-semibold text-[var(--muted)] mb-2 uppercase tracking-wide">
+                    This Run — Score Breakdown ({summary.this_run_scores.total_scored} scored)
+                  </p>
+                  <div className="space-y-1 text-sm">
+                    {summary.this_run_scores.score_8_plus > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-green-400">8–10 · Legacy tier (email waterfall auto)</span>
+                        <strong>{summary.this_run_scores.score_8_plus}</strong>
+                      </div>
+                    )}
+                    {summary.this_run_scores.score_7 > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-green-300">7 · Legacy tier</span>
+                        <strong>{summary.this_run_scores.score_7}</strong>
+                      </div>
+                    )}
+                    {summary.this_run_scores.score_5_6 > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-yellow-400">5–6 · Seed Planter (find email manually)</span>
+                        <strong>{summary.this_run_scores.score_5_6}</strong>
+                      </div>
+                    )}
+                    {summary.this_run_scores.score_below_5 > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-[var(--muted)]">&lt;5 · Below threshold</span>
+                        <strong>{summary.this_run_scores.score_below_5}</strong>
+                      </div>
+                    )}
+                    {summary.this_run_scores.filtered_out > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-red-400">Filtered / no website</span>
+                        <strong>{summary.this_run_scores.filtered_out}</strong>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Cost summary for this run */}
+              {summary?.cost && summary.cost.total_usd > 0 && (
+                <div className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3">
+                  <p className="text-xs font-semibold text-[var(--muted)] mb-2 uppercase tracking-wide">
+                    Run Cost — ${summary.cost.total_usd.toFixed(4)} total
+                  </p>
+                  <div className="space-y-1 text-xs">
+                    {Object.entries(summary.cost.by_stage)
+                      .sort(([, a], [, b]) => b - a)
+                      .map(([stage, cost]) => (
+                        <div key={stage} className="flex justify-between text-sm">
+                          <span className="text-[var(--muted)] capitalize">{stage.replace(/-/g, " ")}</span>
+                          <span className="tabular-nums">${(cost as number).toFixed(4)}</span>
+                        </div>
+                      ))}
+                    {summary.cost.leads_billed > 0 && (
+                      <p className="text-[var(--muted)] pt-1 border-t border-[var(--border)] mt-1">
+                        ~${(summary.cost.total_usd / summary.cost.leads_billed).toFixed(4)}/lead across {summary.cost.leads_billed} leads
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Overall DB summary */}
+              {summary && (
+                <>
+                  <div className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3">
+                    <p className="text-xs font-semibold text-[var(--muted)] mb-2 uppercase tracking-wide">All leads ({summary.pipeline.total} total)</p>
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
+                      <div className="flex justify-between"><span className="text-[var(--muted)]">Pending</span><span>{summary.pipeline.pending}</span></div>
+                      <div className="flex justify-between"><span className="text-[var(--muted)]">Scraped</span><span>{summary.pipeline.scraped}</span></div>
+                      <div className="flex justify-between"><span className="text-[var(--muted)]">Enriched</span><span>{summary.pipeline.enriched}</span></div>
+                      <div className="flex justify-between"><span className="text-[var(--muted)]">Scored</span><span>{summary.pipeline.scored}</span></div>
+                      <div className="flex justify-between"><span className="text-green-400">Outreach written</span><span>{summary.pipeline.outreach_generated}</span></div>
+                      <div className="flex justify-between"><span className="text-[var(--muted)]">Filtered out</span><span>{summary.pipeline.filtered_out}</span></div>
+                      <div className="flex justify-between"><span className="text-red-400">Failed</span><span>{summary.pipeline.failed}</span></div>
+                    </div>
+                  </div>
+
+                  {summary.highlights.ready_to_push > 0 && (
+                    <a
+                      href="/instantly"
+                      className="block w-full text-center px-4 py-2.5 bg-green-800 hover:bg-green-700 text-white rounded-lg text-sm font-medium transition-colors"
+                    >
+                      Push {summary.highlights.ready_to_push} leads to Instantly &rarr;
+                    </a>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {job.status === "completed" && !summary && (
+            <p className="text-xs text-[var(--muted)] mt-3">Loading summary...</p>
+          )}
+
+          {job.error && <p className="text-sm text-red-400 mt-2">{job.error}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
