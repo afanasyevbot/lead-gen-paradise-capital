@@ -273,6 +273,34 @@ CRITICAL REMINDERS:
         result.revenue_gate_applied = true;
       }
 
+      // S1 + S2: Post-model score adjustments based on data completeness.
+      // Check what we actually have on this lead and adjust:
+      //   −1 for missing LinkedIn (unverifiable owner claim)
+      //   +1 for confirmed email found (direct contact)
+      // Also record the 0–4 data_completeness sub-score for UI display.
+      const hasScraped = !!db.prepare("SELECT 1 FROM scraped_content WHERE lead_id = ?").get(row.id);
+      const hasLinkedIn = !!row.linkedin_url;
+      const hasEmailFound = !!db.prepare(
+        "SELECT 1 FROM founder_emails WHERE lead_id = ? AND status = 'found'"
+      ).get(row.id);
+      const completeness = Number(!!row.website) + Number(hasScraped) + Number(hasLinkedIn) + Number(hasEmailFound);
+      (result as Record<string, unknown>).data_completeness = completeness;
+      (result as Record<string, unknown>).has_linkedin = hasLinkedIn;
+      (result as Record<string, unknown>).has_email = hasEmailFound;
+
+      const originalScore = result.score;
+      if (!hasLinkedIn && result.score > 1) {
+        result.score = Math.max(1, result.score - 1);
+        (result as Record<string, unknown>).linkedin_penalty_applied = true;
+      }
+      if (hasEmailFound && result.score < 10) {
+        result.score = Math.min(10, result.score + 1);
+        (result as Record<string, unknown>).email_boost_applied = true;
+      }
+      if (originalScore !== result.score) {
+        (result as Record<string, unknown>).original_model_score = originalScore;
+      }
+
       db.prepare(
         `INSERT OR REPLACE INTO scoring_data (lead_id, score, confidence, recommended_action, data, created_at)
          VALUES (?, ?, ?, ?, ?, datetime('now'))`

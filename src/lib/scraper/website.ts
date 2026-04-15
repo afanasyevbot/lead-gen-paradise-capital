@@ -461,10 +461,16 @@ export async function scrapeLeadsWebsites(
   }
 
   // ── Step 3: Scrape all pending leads that now have websites ───────────────
-  // This includes X-Ray leads whose websites were just discovered above
+  // This includes X-Ray leads whose websites were just discovered above.
+  // R6: Also retry scrape_failed leads older than 7 days — transient failures
+  // (timeout, temporary 503, DNS blip) shouldn't be terminal forever.
   const leads = db
     .prepare(
-      `SELECT * FROM leads WHERE enrichment_status = 'pending'
+      `SELECT * FROM leads
+       WHERE (
+         enrichment_status = 'pending'
+         OR (enrichment_status = 'scrape_failed' AND updated_at < datetime('now', '-7 days'))
+       )
        AND website IS NOT NULL AND website != '' LIMIT ?`
     )
     .all(limit) as { id: number; website: string; business_name: string }[];
