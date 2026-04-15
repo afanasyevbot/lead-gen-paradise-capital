@@ -27,6 +27,7 @@ import { PDLEmailProvider } from "./providers/pdl";
 import { SnovEmailProvider } from "./providers/snov";
 import { DropcontactEmailProvider } from "./providers/dropcontact";
 import { verifyEmail } from "./verification";
+import { withTimeout } from "@/lib/async/with-timeout";
 
 /**
  * All available providers in waterfall order.
@@ -100,12 +101,11 @@ export class WaterfallEmailFinder {
 
     // Hard per-provider timeout. Prevents a single slow/hanging provider
     // (exhausted quota, rate-limit backoff, DNS failure) from eating 10–30s.
+    // NOTE: in-flight HTTP sockets from the aborted provider may continue
+    // running until the upstream responds — providers that take AbortSignal
+    // should be wired via the provider.interface in a follow-up. For now the
+    // timeout at least caps wall-clock time.
     const PROVIDER_TIMEOUT_MS = 5000;
-    const withTimeout = <T>(p: Promise<T>, ms: number, label: string): Promise<T> =>
-      new Promise((resolve, reject) => {
-        const t = setTimeout(() => reject(new Error(`${label} timeout ${ms}ms`)), ms);
-        p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
-      });
 
     for (const provider of this.providers) {
       providersAttempted.push(provider.name);
