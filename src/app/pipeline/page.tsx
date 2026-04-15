@@ -73,6 +73,52 @@ const PIPELINE_CONFIGS: { key: PipelineMode; label: string; desc: string; endpoi
   },
 ];
 
+function SummaryStat({ label, value, tone, hint }: { label: string; value: number; tone: "green" | "yellow" | "red" | "neutral"; hint?: string }) {
+  const toneClass = {
+    green: "text-green-400",
+    yellow: "text-yellow-400",
+    red: "text-red-400",
+    neutral: "text-[var(--fg)]",
+  }[tone];
+  const dimmed = value === 0 ? "opacity-40" : "";
+  return (
+    <div className={`flex flex-col ${dimmed}`}>
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-xs text-[var(--muted)]">{label}</span>
+        <span className={`text-lg font-bold tabular-nums ${toneClass}`}>{value}</span>
+      </div>
+      {hint && <span className="text-[10px] text-[var(--muted)] italic">{hint}</span>}
+    </div>
+  );
+}
+
+const TIER_COLORS: Record<string, { text: string; bg: string }> = {
+  "green-400": { text: "text-green-400", bg: "bg-green-400" },
+  "green-300": { text: "text-green-300", bg: "bg-green-300" },
+  "yellow-400": { text: "text-yellow-400", bg: "bg-yellow-400" },
+  "gray-500": { text: "text-gray-500", bg: "bg-gray-500" },
+};
+
+function ScoreTier({ label, sublabel, count, total, color }: { label: string; sublabel: string; count: number; total: number; color: keyof typeof TIER_COLORS }) {
+  const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+  const c = TIER_COLORS[color];
+  return (
+    <div>
+      <div className="flex items-baseline justify-between text-sm mb-1">
+        <span className={c.text}>
+          <strong>{label}</strong> <span className="text-[var(--muted)] text-xs">· {sublabel}</span>
+        </span>
+        <span className="tabular-nums">
+          <strong>{count}</strong> <span className="text-[var(--muted)] text-xs">({pct}%)</span>
+        </span>
+      </div>
+      <div className="w-full bg-[var(--border)] rounded-full h-1">
+        <div className={`${c.bg} h-1 rounded-full transition-all`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
 function StageBox({ stage, isActive, isDone }: { stage: { key: string; label: string; desc: string }; isActive: boolean; isDone: boolean }) {
   return (
     <div
@@ -375,130 +421,38 @@ export default function PipelinePage() {
 
           {job.status === "completed" && job.result && (
             <div className="mt-4 space-y-4">
-              {/* This Run */}
-              {(() => {
-                const totalAttempted =
-                  (job.result.pre_filter_passed ?? 0) + (job.result.pre_filter_rejected ?? 0) +
-                  (job.result.icp_matched ?? 0) + (job.result.icp_rejected ?? 0) +
-                  (job.result.websites_scraped ?? 0) + (job.result.websites_failed ?? 0) +
-                  (job.result.xray_websites_found ?? 0) + (job.result.xray_linkedin_only ?? 0) +
-                  (job.result.enriched ?? 0) + (job.result.enrich_failed ?? 0) +
-                  (job.result.scored ?? 0) + (job.result.score_failed ?? 0) +
-                  (job.result.emails_found ?? 0) + (job.result.emails_not_found ?? 0) +
-                  (job.result.outreach_generated ?? 0) + (job.result.outreach_skipped ?? 0);
-                if (totalAttempted === 0) {
-                  return (
-                    <div className="bg-yellow-950/40 border border-yellow-800/40 rounded-lg p-4 text-sm">
-                      <p className="font-medium text-yellow-300 mb-1">No leads found to process</p>
-                      <p className="text-[var(--muted)] text-xs mb-3">
-                        Every stage found 0 leads in the right status. Check the Leads page for current statuses, or re-queue failed leads below.
-                      </p>
-                      <div className="flex gap-3">
-                        <a href="/scrape" className="text-[var(--accent)] hover:underline text-xs">Scrape new leads &rarr;</a>
-                        <a href="/upload" className="text-[var(--accent)] hover:underline text-xs">Upload a CSV &rarr;</a>
-                        <a href="/leads" className="text-[var(--accent)] hover:underline text-xs">View existing leads &rarr;</a>
-                      </div>
-                    </div>
-                  );
-                }
-                return (
-                  <div className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3">
-                    <p className="text-xs font-semibold text-[var(--muted)] mb-2 uppercase tracking-wide">This Run</p>
-                    <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
-                      {(job.result.pre_filter_rejected ?? 0) > 0 && (
-                        <div className="flex justify-between"><span className="text-[var(--muted)]">Pre-filtered (chains/wrong industry)</span><span>{job.result.pre_filter_rejected}</span></div>
-                      )}
-                      {(job.result.icp_rejected ?? 0) > 0 && (
-                        <div className="flex justify-between"><span className="text-yellow-500">ICP screen rejected</span><span>{job.result.icp_rejected}</span></div>
-                      )}
-                      {(job.result.icp_matched ?? 0) > 0 && (
-                        <div className="flex justify-between"><span className="text-green-400">ICP screen passed</span><span>{job.result.icp_matched}</span></div>
-                      )}
-                      {(job.result.xray_websites_found ?? 0) > 0 && (
-                        <div className="flex justify-between"><span className="text-green-400">X-Ray websites discovered</span><span>{job.result.xray_websites_found}</span></div>
-                      )}
-                      {(job.result.xray_linkedin_only ?? 0) > 0 && (
-                        <div className="flex justify-between"><span className="text-yellow-400">X-Ray LinkedIn only</span><span>{job.result.xray_linkedin_only}</span></div>
-                      )}
-                      {(job.result.websites_scraped ?? 0) > 0 && (
-                        <div className="flex justify-between"><span className="text-[var(--muted)]">Websites scraped</span><span>{job.result.websites_scraped}</span></div>
-                      )}
-                      {(job.result.enriched ?? 0) > 0 && (
-                        <div className="flex justify-between"><span className="text-[var(--muted)]">Extracted</span><span>{job.result.enriched}</span></div>
-                      )}
-                      {(job.result.enrich_failed ?? 0) > 0 && (
-                        <div className="flex justify-between"><span className="text-red-400">Extract failed</span><span>{job.result.enrich_failed}</span></div>
-                      )}
-                      {(job.result.scored ?? 0) > 0 && (
-                        <div className="flex justify-between"><span className="text-[var(--muted)]">Scored</span><span>{job.result.scored}</span></div>
-                      )}
-                      {(job.result.leads_processed ?? 0) > 0 && (
-                        <div className="flex justify-between"><span className="text-[var(--muted)]">Emails checked</span><span>{job.result.leads_processed}</span></div>
-                      )}
-                      {(job.result.emails_found ?? 0) > 0 && (
-                        <div className="flex justify-between"><span className="text-green-400">Emails found</span><span>{job.result.emails_found}</span></div>
-                      )}
-                      {(job.result.emails_not_found ?? 0) > 0 && (
-                        <div className="flex justify-between"><span className="text-yellow-400">Emails not found</span><span>{job.result.emails_not_found}</span></div>
-                      )}
-                      {(job.result.outreach_generated ?? 0) > 0 && (
-                        <div className="flex justify-between"><span className="text-green-400">Outreach written</span><span>{job.result.outreach_generated}</span></div>
-                      )}
-                      {(job.result.outreach_skipped ?? 0) > 0 && (
-                        <div className="flex justify-between"><span className="text-[var(--muted)]">Skipped (low score)</span><span>{job.result.outreach_skipped}</span></div>
-                      )}
-                      {(job.result.websites_failed ?? 0) + (job.result.score_failed ?? 0) > 0 && (
-                        <div className="flex justify-between"><span className="text-red-400">Other failures</span>
-                          <span>{(job.result.websites_failed || 0) + (job.result.score_failed || 0)}</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })()}
+              {/* ═══ RUN SUMMARY ═══ */}
+              <div className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-4">
+                <p className="text-xs font-semibold text-[var(--muted)] mb-3 uppercase tracking-wide">Run Summary</p>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
+                  <SummaryStat label="ICP screen rejected" value={job.result.icp_rejected ?? 0} tone="yellow" />
+                  <SummaryStat label="ICP screen passed" value={job.result.icp_matched ?? 0} tone="green" />
+                  <SummaryStat label="Websites scraped" value={job.result.websites_scraped ?? 0} tone="neutral" />
+                  <SummaryStat label="X-Ray LinkedIn only" value={job.result.xray_linkedin_only ?? 0} tone="yellow" hint="no website → unscorable" />
+                  <SummaryStat label="Scored" value={job.result.scored ?? 0} tone="green" />
+                  <SummaryStat label="Score failed" value={job.result.score_failed ?? 0} tone="red" />
+                  <SummaryStat label="Emails found" value={job.result.emails_found ?? 0} tone="green" />
+                  <SummaryStat label="Emails not found" value={job.result.emails_not_found ?? 0} tone="yellow" />
+                  <SummaryStat label="Outreach written" value={job.result.outreach_generated ?? 0} tone="green" />
+                </div>
+              </div>
 
-              {/* Score breakdown for this run */}
+              {/* ═══ SCORE DISTRIBUTION (this run) ═══ */}
               {summary?.this_run_scores && summary.this_run_scores.total_scored > 0 && (
-                <div className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3">
-                  <p className="text-xs font-semibold text-[var(--muted)] mb-2 uppercase tracking-wide">
-                    This Run — Score Breakdown ({summary.this_run_scores.total_scored} scored)
+                <div className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-4">
+                  <p className="text-xs font-semibold text-[var(--muted)] mb-3 uppercase tracking-wide">
+                    Score Distribution — {summary.this_run_scores.total_scored} scored this run
                   </p>
-                  <div className="space-y-1 text-sm">
-                    {summary.this_run_scores.score_8_plus > 0 && (
-                      <div className="flex justify-between">
-                        <span className="text-green-400">8–10 · Legacy tier (email waterfall auto)</span>
-                        <strong>{summary.this_run_scores.score_8_plus}</strong>
-                      </div>
-                    )}
-                    {summary.this_run_scores.score_7 > 0 && (
-                      <div className="flex justify-between">
-                        <span className="text-green-300">7 · Legacy tier</span>
-                        <strong>{summary.this_run_scores.score_7}</strong>
-                      </div>
-                    )}
-                    {summary.this_run_scores.score_5_6 > 0 && (
-                      <div className="flex justify-between">
-                        <span className="text-yellow-400">5–6 · Seed Planter (find email manually)</span>
-                        <strong>{summary.this_run_scores.score_5_6}</strong>
-                      </div>
-                    )}
-                    {summary.this_run_scores.score_below_5 > 0 && (
-                      <div className="flex justify-between">
-                        <span className="text-[var(--muted)]">&lt;5 · Below threshold</span>
-                        <strong>{summary.this_run_scores.score_below_5}</strong>
-                      </div>
-                    )}
-                    {summary.this_run_scores.filtered_out > 0 && (
-                      <div className="flex justify-between">
-                        <span className="text-red-400">Filtered / no website</span>
-                        <strong>{summary.this_run_scores.filtered_out}</strong>
-                      </div>
-                    )}
+                  <div className="space-y-2 text-sm">
+                    <ScoreTier label="8–10 · Legacy tier" sublabel="email waterfall auto" count={summary.this_run_scores.score_8_plus} total={summary.this_run_scores.total_scored} color="green-400" />
+                    <ScoreTier label="7 · Legacy tier" sublabel="email waterfall auto" count={summary.this_run_scores.score_7} total={summary.this_run_scores.total_scored} color="green-300" />
+                    <ScoreTier label="5–6 · Seed Planter" sublabel="find email manually" count={summary.this_run_scores.score_5_6} total={summary.this_run_scores.total_scored} color="yellow-400" />
+                    <ScoreTier label="<5 · Below threshold" sublabel="no outreach" count={summary.this_run_scores.score_below_5} total={summary.this_run_scores.total_scored} color="gray-500" />
                   </div>
                 </div>
               )}
 
-              {/* Per-lead score summary — always render after completion */}
+              {/* ═══ PER-LEAD BREAKDOWN ═══ */}
               <div className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3">
                 <p className="text-xs font-semibold text-[var(--muted)] mb-2 uppercase tracking-wide">
                   Lead Scores ({scoredLeads.length}) {scoredLeadsState === "loading" && "— loading..."}
