@@ -19,16 +19,27 @@ export class WebsiteEmailProvider implements EmailProvider {
   async lookup(input: EmailLookupInput): Promise<EmailLookupResult | null> {
     const db = getDb();
 
-    // Find the lead by domain to get enrichment data and raw scraped text
-    const domain = input.domain.replace(/^www\./, "");
-    const row = db.prepare(
-      `SELECT ed.data, l.id, sc.all_text
+    // Find the lead by EXACT hostname match. Using LIKE %domain% previously
+    // caused collisions: searching "smith.com" also matched "smithplumbing.com".
+    const domain = input.domain.replace(/^www\./, "").toLowerCase();
+    const candidates = db.prepare(
+      `SELECT ed.data, l.id, l.website, sc.all_text
        FROM leads l
        JOIN enrichment_data ed ON ed.lead_id = l.id
        LEFT JOIN scraped_content sc ON sc.lead_id = l.id
-       WHERE l.website LIKE ?
-       LIMIT 1`
-    ).get(`%${domain}%`) as { data: string; id: number; all_text: string | null } | undefined;
+       WHERE l.website LIKE ?`
+    ).all(`%${domain}%`) as { data: string; id: number; website: string | null; all_text: string | null }[];
+
+    const row = candidates.find((r) => {
+      if (!r.website) return false;
+      try {
+        const host = new URL(r.website.startsWith("http") ? r.website : `https://${r.website}`)
+          .hostname.replace(/^www\./, "").toLowerCase();
+        return host === domain;
+      } catch {
+        return false;
+      }
+    });
 
     if (!row) return null;
 

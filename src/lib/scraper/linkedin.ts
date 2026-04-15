@@ -25,15 +25,24 @@ async function findLinkedInProfile(
     error: null,
   };
 
-  // Build search query — prioritize owner name if we have it
-  let query: string;
+  // Build the search query list. Google/Serper penalise long OR-chains
+  // (often returns 0 results or "query not allowed"), so we run a small
+  // sequence of simple queries in priority order and stop at the first hit.
+  const location = [city, state].filter(Boolean).join(" ");
+  const titles = ["founder", "owner", "president", "CEO", "principal", "proprietor"];
+  const queries: string[] = [];
   if (ownerName && ownerName !== "null") {
-    query = `site:linkedin.com/in "${ownerName}" "${businessName}"`;
+    queries.push(`site:linkedin.com/in "${ownerName}" "${businessName}"`);
+    queries.push(`site:linkedin.com/in "${ownerName}" ${location}`);
   } else {
-    const location = [city, state].filter(Boolean).join(" ");
-    query = `site:linkedin.com/in "${businessName}" ${location} owner OR founder OR president OR CEO OR "managing partner"`;
+    for (const title of titles) {
+      queries.push(`site:linkedin.com/in "${businessName}" "${title}" ${location}`.trim());
+    }
+    // Fallback: business name + location, no title (catches founders with
+    // non-standard titles like "Head Honcho" or just the company name)
+    queries.push(`site:linkedin.com/in "${businessName}" ${location}`.trim());
   }
-
+  const query = queries[0]!;
   const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
 
   const page = await context.newPage();

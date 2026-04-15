@@ -6,6 +6,32 @@ import { SEARCH_PRESETS } from "@/lib/config";
 import fs from "fs";
 import path from "path";
 
+// Broader fallback terms per industry — used when the primary preset query
+// returns suspiciously few leads. Keep these very generic on purpose; they
+// widen the net rather than replace the more specific presets.
+const QUERY_FALLBACKS: Record<string, string> = {
+  hvac: "HVAC",
+  plumbing: "plumber",
+  marine: "marine services",
+  manufacturing: "manufacturer",
+  construction: "contractor",
+  roofing: "roofing",
+  electrical: "electrician",
+  trucking: "trucking",
+  landscaping: "landscaping",
+  "pest-control": "pest control",
+  waste: "waste services",
+  auto: "auto repair",
+  "fire-security": "fire protection",
+};
+
+function broadenQuery(original: string, preset: string): string | null {
+  const fallback = QUERY_FALLBACKS[preset];
+  if (!fallback) return null;
+  if (original.toLowerCase() === fallback.toLowerCase()) return null;
+  return fallback;
+}
+
 function loadAllPresets(): Record<string, string[]> {
   const merged = { ...SEARCH_PRESETS };
   try {
@@ -76,7 +102,22 @@ export async function POST(req: NextRequest) {
               currentItem: `${query} in ${location}`,
             });
 
-            const leads = await searchPlaces(query, location);
+            let leads = await searchPlaces(query, location);
+
+            // Low-yield fallback — if a specific query returns <10 leads,
+            // rerun with a broader term for the same preset so we don't miss
+            // legitimate businesses that don't match the narrow phrasing.
+            if (leads.length < 10 && preset && allPresets[preset]) {
+              const broader = broadenQuery(query, preset);
+              if (broader && broader !== query) {
+                await interQueryDelay();
+                const extra = await searchPlaces(broader, location);
+                // Dedup by place_id before appending
+                const seen = new Set(leads.map((l) => l.place_id));
+                for (const l of extra) if (!seen.has(l.place_id)) leads.push(l);
+              }
+            }
+
             counts.total += leads.length;
 
             for (const lead of leads) {

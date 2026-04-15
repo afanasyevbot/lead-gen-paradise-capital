@@ -95,25 +95,31 @@ export const icpScreenStage: PipelineStage = {
         const text =
           response.content[0].type === "text" ? response.content[0].text.trim() : "";
 
-        let result: { match: boolean; reason: string } = { match: true, reason: "" };
+        let result: { match: boolean; reason: string } | null = null;
         try {
           result = JSON.parse(text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim());
         } catch {
-          // If Haiku can't parse, give benefit of the doubt — don't block the lead
-          result = { match: true, reason: "parse error — defaulting to pass" };
+          result = null;
         }
 
-        if (result.match) {
+        if (result && result.match === true) {
           // Keep as 'scraped' — extract stage picks it up
           matched++;
-        } else {
+        } else if (result && result.match === false) {
           setLeadStatus(lead.id, "icp_rejected");
           rejected++;
+        } else {
+          // Fail CLOSED — we don't know, mark for manual review rather than
+          // spending extraction budget on something Haiku couldn't classify.
+          setLeadStatus(lead.id, "icp_parse_error");
+          errored++;
         }
-      } catch {
-        // On error, pass through — don't block leads due to API errors
+      } catch (err) {
+        // API error — fail closed too. Otherwise transient outages silently
+        // pass through everything and burn the extraction budget.
+        console.warn(`[ICP_SCREEN] API error for lead ${lead.id}:`, String(err));
+        setLeadStatus(lead.id, "icp_screen_error");
         errored++;
-        matched++;
       }
     }
 

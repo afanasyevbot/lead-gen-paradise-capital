@@ -78,9 +78,31 @@ async function injectStealthScripts(page: import("playwright").Page): Promise<vo
   });
 }
 
+function normalizeBusinessName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    // Strip common legal/business suffixes so "Smith Plumbing LLC" and
+    // "Smith Plumbing, Inc." collide into one stable key.
+    .replace(/[,.]/g, " ")
+    .replace(/\b(llc|l\.l\.c|inc|incorporated|corp|corporation|co|company|ltd|limited|pllc|pc|pa|llp|lp)\b\.?/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeAddress(address: string): string {
+  return address
+    .trim()
+    .toLowerCase()
+    .replace(/[,.]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function makePlaceId(name: string, address: string): string {
-  const raw = `${name.trim().toLowerCase()}|${address.trim().toLowerCase()}`;
-  return createHash("sha256").update(raw).digest("hex").slice(0, 16);
+  const raw = `${normalizeBusinessName(name)}|${normalizeAddress(address)}`;
+  // 32 chars → 128 bits, collision risk negligible at our scale
+  return createHash("sha256").update(raw).digest("hex").slice(0, 32);
 }
 
 function parseAddress(address: string): { city: string | null; state: string | null; zip_code: string | null } {

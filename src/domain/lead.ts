@@ -15,7 +15,7 @@ import type { EnrichmentStatus } from "./types";
  */
 const VALID_TRANSITIONS: Record<EnrichmentStatus, EnrichmentStatus[]> = {
   pending:           ["scraped", "scrape_failed", "pre_filtered", "no_website"],
-  scraped:           ["enriched", "enrich_failed", "icp_rejected"],
+  scraped:           ["enriched", "enrich_failed", "icp_rejected", "icp_parse_error", "icp_screen_error"],
   enriched:          ["scored", "score_failed"],
   scored:            ["outreach_generated", "outreach_failed"],
   outreach_generated: [],                                   // terminal
@@ -25,6 +25,8 @@ const VALID_TRANSITIONS: Record<EnrichmentStatus, EnrichmentStatus[]> = {
   score_failed:      ["scored", "score_failed"],            // can retry
   pre_filtered:      [],                                    // terminal — rule-based reject
   icp_rejected:      [],                                    // terminal — Haiku ICP reject
+  icp_parse_error:   ["scraped", "icp_rejected"],           // unparseable — retryable / manual
+  icp_screen_error:  ["scraped", "icp_rejected"],           // API error — retryable
   no_website:        [],                                    // terminal — no website to scrape
 };
 
