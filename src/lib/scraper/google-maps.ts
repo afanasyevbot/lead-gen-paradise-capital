@@ -188,13 +188,33 @@ export async function searchPlaces(
       console.warn(`[GMAPS] Consent/cookie wall detected for "${query}" in "${location}"`);
     }
 
-    // Accept cookies if prompted
+    // Accept cookies/consent if prompted — handles English, Dutch, French, German, Spanish
     try {
-      const btn = page.locator("button:has-text('Accept all')");
-      if (await btn.isVisible({ timeout: 2000 })) {
-        console.log(`[GMAPS] Accepting cookie consent`);
-        await btn.click();
-        await page.waitForTimeout(1000);
+      const consentSelectors = [
+        "button:has-text('Accept all')",       // English
+        "button:has-text('Alles accepteren')", // Dutch
+        "button:has-text('Tout accepter')",    // French
+        "button:has-text('Alle akzeptieren')", // German
+        "button:has-text('Aceptar todo')",     // Spanish
+        "button:has-text('Accetta tutto')",    // Italian
+        "form:nth-of-type(2) button",          // Generic fallback — 2nd form = accept
+      ];
+      let accepted = false;
+      for (const selector of consentSelectors) {
+        try {
+          const btn = page.locator(selector).first();
+          if (await btn.isVisible({ timeout: 1500 })) {
+            console.log(`[GMAPS] Accepting consent dialog via: ${selector}`);
+            await btn.click();
+            await page.waitForTimeout(2000);
+            accepted = true;
+            break;
+          }
+        } catch { /* try next */ }
+      }
+      if (accepted) {
+        // After accepting, wait for Maps to load
+        await page.waitForSelector("[role='feed'], div.Nv2PK", { timeout: 15000 }).catch(() => {});
       }
     } catch { /* ignore */ }
 
