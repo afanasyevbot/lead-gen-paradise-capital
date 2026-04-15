@@ -13,7 +13,13 @@
 
 import type { Page } from "playwright";
 
-const EMAIL_REGEX = /[\w.+-]+@[\w-]+\.[a-z]{2,}/gi;
+// Two regex constants. The `g` flag advances `lastIndex` on `.test()` which
+// makes a single shared instance return different results on successive calls —
+// a subtle source of missed matches. Use `_G` for match loops, plain for tests.
+const EMAIL_REGEX_G = () => /[\w.+-]+@[\w-]+\.[a-z]{2,}/gi;
+const EMAIL_REGEX = /^[\w.+-]+@[\w-]+\.[a-z]{2,}$/i;
+// Reject images, fonts, and other asset-URL-looking addresses
+const ASSET_TLD_RE = /@[\w.-]+\.(png|jpe?g|gif|webp|svg|css|js|woff2?|ttf|eot|ico|mp4|mp3|pdf)$/i;
 
 /**
  * Decode Cloudflare email protection hex string.
@@ -25,6 +31,7 @@ const EMAIL_REGEX = /[\w.+-]+@[\w-]+\.[a-z]{2,}/gi;
  */
 export function decodeCfEmail(hex: string): string | null {
   if (!hex || hex.length < 4 || hex.length % 2 !== 0) return null;
+  if (!/^[a-f0-9]+$/i.test(hex)) return null;
   try {
     const key = parseInt(hex.slice(0, 2), 16);
     let email = "";
@@ -37,16 +44,28 @@ export function decodeCfEmail(hex: string): string | null {
 
 /**
  * Deobfuscate common "john [at] company [dot] com" style patterns.
- * Runs BEFORE the main regex so the obfuscated emails become scannable.
+ * ONLY touches bracketed/parenthesised forms. We deliberately do NOT replace
+ * the bare " at " / " dot " because that corrupts normal prose ("based at
+ * Dallas" → "based@Dallas") and the subsequent email regex then extracts
+ * fake addresses with misleading confidence.
  */
 function deobfuscate(text: string): string {
   return text
     .replace(/\s*\[\s*at\s*\]\s*/gi, "@")
     .replace(/\s*\(\s*at\s*\)\s*/gi, "@")
-    .replace(/\s+at\s+/gi, (m) => (m.length < 8 ? "@" : m)) // conservative
+    .replace(/\s*\{\s*at\s*\}\s*/gi, "@")
     .replace(/\s*\[\s*dot\s*\]\s*/gi, ".")
     .replace(/\s*\(\s*dot\s*\)\s*/gi, ".")
-    .replace(/\s+dot\s+/gi, ".");
+    .replace(/\s*\{\s*dot\s*\}\s*/gi, ".");
+}
+
+/** Return true if the address looks like junk (asset URL, placeholder, too long). */
+function isJunkEmail(e: string): boolean {
+  if (e.length > 80) return true;
+  if (ASSET_TLD_RE.test(e)) return true;
+  if (/@(sentry|example|test|domain|yourdomain|email|site)\.(io|com|org)/.test(e)) return true;
+  if (/@\d+x\./.test(e)) return true; // "image@2x.png"
+  return false;
 }
 
 export interface HarvestResult {
@@ -74,7 +93,7 @@ export async function harvestContactsFromPage(page: Page): Promise<HarvestResult
     );
     for (const m of mailtos) {
       const addr = m.trim().toLowerCase();
-      if (addr && EMAIL_REGEX.test(addr)) emails.add(addr);
+      if (addr && EMAIL_REGEX.test(addr) && !isJunkEmail(addr)) emails.add(addr);
     }
   } catch { /* ignore */ }
 
@@ -93,21 +112,22 @@ export async function harvestContactsFromPage(page: Page): Promise<HarvestResult
   try {
     // 3. Full HTML regex (catches inline JS, JSON-LD schema blocks)
     const html = await page.content();
-    const fromHtml = html.match(EMAIL_REGEX) ?? [];
+    const fromHtml = html.match(EMAIL_REGEX_G()) ?? [];
     for (const e of fromHtml) {
       const lower = e.toLowerCase();
-      // Filter junk: sentry DSNs, image@2x filenames, etc.
-      if (lower.length > 80) continue;
-      if (/@(sentry|example|test|domain|yourdomain|email|site)\.(io|com|org)/.test(lower)) continue;
-      if (/@\d+x\./.test(lower)) continue; // "image@2x.png"
+      if (isJunkEmail(lower)) continue;
       emails.add(lower);
     }
 
     // 4. Deobfuscated text regex
     const text = await page.innerText("body").catch(() => "");
     const deob = deobfuscate(text);
-    const fromText = deob.match(EMAIL_REGEX) ?? [];
-    for (const e of fromText) emails.add(e.toLowerCase());
+    const fromText = deob.match(EMAIL_REGEX_G()) ?? [];
+    for (const e of fromText) {
+      const lower = e.toLowerCase();
+      if (isJunkEmail(lower)) continue;
+      emails.add(lower);
+    }
 
     // Phones — capture from tel: hrefs + text
     const telHrefs: string[] = await page
@@ -147,19 +167,21 @@ export function harvestContactsFromStored(html: string, text: string): HarvestRe
   }
 
   // HTML regex
-  const fromHtml = html.match(EMAIL_REGEX) ?? [];
+  const fromHtml = html.match(EMAIL_REGEX_G()) ?? [];
   for (const e of fromHtml) {
     const lower = e.toLowerCase();
-    if (lower.length > 80) continue;
-    if (/@(sentry|example|test|domain|yourdomain|email|site)\.(io|com|org)/.test(lower)) continue;
-    if (/@\d+x\./.test(lower)) continue;
+    if (isJunkEmail(lower)) continue;
     emails.add(lower);
   }
 
   // Deobfuscated text
   const deob = deobfuscate(text);
-  const fromText = deob.match(EMAIL_REGEX) ?? [];
-  for (const e of fromText) emails.add(e.toLowerCase());
+  const fromText = deob.match(EMAIL_REGEX_G()) ?? [];
+  for (const e of fromText) {
+    const lower = e.toLowerCase();
+    if (isJunkEmail(lower)) continue;
+    emails.add(lower);
+  }
 
   return { emails: [...emails], phones: [] };
 }
@@ -172,21 +194,25 @@ export function harvestContactsFromStored(html: string, text: string): HarvestRe
  *   3. Generic @ own-domain      (info@acme.com)
  *   4. Generic @ other-domain
  */
-const GENERIC_PREFIXES = /^(info|contact|hello|support|admin|sales|enquir|enquiries|inquiries|mail|office|noreply|no-reply|webmaster|team|help|service|care|general|main)@/i;
+export const GENERIC_PREFIXES = /^(info|contact|hello|support|admin|sales|enquir\w*|inquir\w*|mail|office|noreply|no-?reply|webmaster|team|help|service|care|general|main|marketing|billing|accounts?)@/i;
 
 export function rankEmails(emails: string[], domain: string): string[] {
   const norm = domain.replace(/^www\./, "").toLowerCase();
-  const scored = emails.map((e) => {
-    const [, host] = e.split("@");
-    const isOwnDomain = host === norm || host?.endsWith(`.${norm}`);
-    const isGeneric = GENERIC_PREFIXES.test(e);
-    let score = 0;
-    if (isOwnDomain) score += 10;
-    if (!isGeneric) score += 5;
-    // Prefer shorter local parts (john@ > jsmith123@)
-    score -= Math.min(5, e.length - (host?.length ?? 0));
-    return { e, score };
-  });
+  const scored = emails
+    .map((e) => {
+      const parts = e.split("@");
+      if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
+      const [local, host] = parts;
+      const isOwnDomain = host === norm || host.endsWith(`.${norm}`);
+      const isGeneric = GENERIC_PREFIXES.test(e);
+      let score = 0;
+      if (isOwnDomain) score += 10;
+      if (!isGeneric) score += 5;
+      // Prefer shorter local parts (john@ > jsmith123@)
+      score -= Math.min(5, Math.floor(local.length / 3));
+      return { e, score };
+    })
+    .filter((x): x is { e: string; score: number } => x !== null);
   scored.sort((a, b) => b.score - a.score);
   return scored.map((x) => x.e);
 }

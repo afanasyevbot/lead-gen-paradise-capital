@@ -13,9 +13,7 @@
 import { getDb } from "@/lib/db";
 import type { EmailProvider, EmailLookupInput, EmailLookupResult } from "../provider.interface";
 import type { EmailProviderName } from "@/domain/types";
-import { rankEmails, harvestContactsFromStored } from "@/lib/scraper/email-harvester";
-
-const GENERIC_RE = /^(info|contact|hello|support|admin|sales|enquir|enquiries|inquiries|mail|office|noreply|no-reply|webmaster|team|help|service|care|general|main)@/i;
+import { rankEmails, harvestContactsFromStored, GENERIC_PREFIXES as GENERIC_RE } from "@/lib/scraper/email-harvester";
 
 export class WebsiteEmailProvider implements EmailProvider {
   name: EmailProviderName = "website";

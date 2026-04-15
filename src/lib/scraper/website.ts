@@ -526,9 +526,24 @@ export async function scrapeLeadsWebsites(
     } else {
       counts.scraped++;
       db.prepare(
-        `INSERT OR REPLACE INTO scraped_content
+        `INSERT INTO scraped_content
            (lead_id, homepage_text, about_text, all_text, pages_scraped, emails_found, phones_found, scraped_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(lead_id) DO UPDATE SET
+           homepage_text = excluded.homepage_text,
+           about_text = excluded.about_text,
+           all_text = excluded.all_text,
+           pages_scraped = excluded.pages_scraped,
+           -- Preserve prior harvested emails/phones if the new scrape found
+           -- nothing (site redesigned, Cloudflare blocking, etc.). Only
+           -- overwrite when the new result is non-empty.
+           emails_found = CASE
+             WHEN excluded.emails_found IS NOT NULL AND excluded.emails_found != '[]'
+             THEN excluded.emails_found ELSE scraped_content.emails_found END,
+           phones_found = CASE
+             WHEN excluded.phones_found IS NOT NULL AND excluded.phones_found != '[]'
+             THEN excluded.phones_found ELSE scraped_content.phones_found END,
+           scraped_at = excluded.scraped_at`
       ).run(
         lead.id, result.homepage_text, result.about_text, result.all_text, result.pages_scraped,
         JSON.stringify(result.emails_found ?? []), JSON.stringify(result.phones_found ?? []),
