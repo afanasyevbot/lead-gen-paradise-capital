@@ -45,7 +45,7 @@ export class HunterEmailProvider implements EmailProvider {
       api_key: apiKey,
     });
 
-    const res = await fetch(`https://api.hunter.io/v2/email-finder?${params}`);
+    const res = await fetch(`https://api.hunter.io/v2/email-finder?${params}`, { signal: input.signal });
 
     if (!res.ok) return null;
 
@@ -81,7 +81,7 @@ export class HunterEmailProvider implements EmailProvider {
       params.set("company", input.companyName);
     }
 
-    const res = await fetch(`https://api.hunter.io/v2/domain-search?${params}`);
+    const res = await fetch(`https://api.hunter.io/v2/domain-search?${params}`, { signal: input.signal });
 
     if (!res.ok) return null;
 

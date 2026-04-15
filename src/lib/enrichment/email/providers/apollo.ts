@@ -36,6 +36,7 @@ export class ApolloEmailProvider implements EmailProvider {
         organization_name: input.companyName || "",
         domain: input.domain,
       }),
+      signal: input.signal,
     });
 
     if (!res.ok) {
