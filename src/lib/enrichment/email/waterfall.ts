@@ -121,7 +121,7 @@ export class WaterfallEmailFinder {
             provider: provider.name,
             confidenceScore: result.confidence,
             verificationStatus: verification?.status ?? "unverified",
-            verificationMethod: verification?.method ?? "none",
+            verificationMethod: verification?.method,
             ownerName: result.ownerName,
             ownerTitle: result.ownerTitle,
             rawResponse: result.rawResponse,
