@@ -41,6 +41,10 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 COPY --from=builder /app/public ./public
 
+# Copy standalone cron/admin scripts (used by the weekly-report Railway cron
+# service — does not affect the main app's start command).
+COPY --from=builder /app/scripts ./scripts
+
 # Copy Playwright browsers from deps stage
 COPY --from=deps /root/.cache/ms-playwright /root/.cache/ms-playwright
 
