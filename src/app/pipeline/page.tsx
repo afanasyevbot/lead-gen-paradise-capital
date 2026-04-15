@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import PipelineHealth from "./PipelineHealth";
 
 interface Job {
   id: string;
@@ -36,6 +37,34 @@ interface ScoredLead {
   estimated_owner_age?: string;
   estimated_revenue_range?: string;
   is_likely_founder?: boolean;
+  has_website?: boolean;
+  has_scraped?: boolean;
+  has_linkedin?: boolean;
+  has_email?: boolean;
+  has_outreach?: boolean;
+  data_completeness?: number;
+}
+
+function CompletenessChips({ lead }: { lead: ScoredLead }) {
+  const chips: { label: string; on: boolean }[] = [
+    { label: "site", on: !!lead.has_website },
+    { label: "scraped", on: !!lead.has_scraped },
+    { label: "li", on: !!lead.has_linkedin },
+    { label: "email", on: !!lead.has_email },
+  ];
+  return (
+    <span className="flex gap-1 shrink-0">
+      {chips.map((c) => (
+        <span key={c.label}
+          title={`${c.label}: ${c.on ? "yes" : "no"}`}
+          className={`text-[9px] px-1 py-0.5 rounded leading-none tabular-nums ${
+            c.on ? "bg-green-900/50 text-green-300" : "bg-[var(--border)] text-[var(--muted)] opacity-50"
+          }`}>
+          {c.label}
+        </span>
+      ))}
+    </span>
+  );
 }
 
 const CORE_STAGES = [
@@ -253,6 +282,9 @@ export default function PipelinePage() {
       <p className="text-sm text-[var(--muted)] mb-6">
         Find founders matching Paul&apos;s avatar: original founder, 60s, $5-50M revenue, people of faith.
       </p>
+
+      {/* Health dashboard: stage coverage, funnel, attention queue, admin actions */}
+      <PipelineHealth />
 
       {/* Pipeline mode selector */}
       <div className="grid grid-cols-2 gap-3 mb-6">
@@ -496,6 +528,7 @@ export default function PipelinePage() {
                               {lead.score}
                             </span>
                             <span className="flex-1 text-sm font-medium truncate">{lead.business_name}</span>
+                            <CompletenessChips lead={lead} />
                             {lead.city && (
                               <span className="text-xs text-[var(--muted)] shrink-0">{lead.city}{lead.state ? `, ${lead.state}` : ""}</span>
                             )}

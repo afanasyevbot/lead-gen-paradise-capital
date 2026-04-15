@@ -580,9 +580,43 @@ function normalizedKey(lead: Record<string, unknown>): string | null {
   return `name:${name}|${city}`;
 }
 
+// R1: Reject obvious parse-failure names at insert time. Caught by audit:
+// X-Ray parser sometimes emits "LinkedIn" / "Google" / "— hvac (Tampa…)" as
+// business_name when the search snippet is malformed.
+const NOISE_NAMES = new Set([
+  "linkedin", "google", "facebook", "facebook.com", "instagram",
+  "twitter", "x.com", "youtube", "tiktok", "-", "", "n/a", "unknown",
+]);
+function isNoiseName(name: string): boolean {
+  const n = String(name || "").trim().toLowerCase();
+  if (!n) return true;
+  if (NOISE_NAMES.has(n)) return true;
+  // "Paul Suhar — hvac (Tampa, Florida)" style — search-fragment concat
+  if (/—\s*(hvac|plumb|heating|cooling|roof|landscap|painter)\b.*\([^)]+\)$/i.test(n)) return true;
+  return false;
+}
+
 export function upsertLead(lead: Record<string, unknown>): boolean {
   const db = getDb();
   const now = new Date().toISOString();
+
+  // R1: Reject noise-token names before they pollute the DB.
+  if (isNoiseName(String(lead.business_name || ""))) {
+    console.warn(`[UPSERT] Rejected noise-token name: "${lead.business_name}" (source=${lead.source})`);
+    return false;
+  }
+
+  // R2: X-Ray leads must have either a website OR a linkedin_url in raw_data.
+  // A name-only X-Ray row is unactionable.
+  if (lead.source === "linkedin_xray") {
+    const raw = (lead.raw_data as Record<string, unknown>) || {};
+    const hasWebsite = !!lead.website;
+    const hasLinkedIn = !!raw.linkedin_url || !!raw.profile_url;
+    if (!hasWebsite && !hasLinkedIn) {
+      console.warn(`[UPSERT] Rejected X-Ray lead with no website/linkedin_url: "${lead.business_name}"`);
+      return false;
+    }
+  }
 
   // Primary dedup: place_id hash (deterministic for same-source rediscovery).
   let existing = db

@@ -180,18 +180,24 @@ ${isLinkedInOnly
         })(),
       });
 
-      // Demote unsupported founder claims. Claude has a tendency to return
+      // R4: Demote unsupported founder claims. Claude has a tendency to return
       // is_likely_founder=true with no supporting founder_evidence — which
-      // propagates through scoring and inflates the funnel. If there's no
-      // concrete evidence string, flip the claim to null so downstream
-      // scoring treats the founder status as unknown, not confirmed.
+      // propagates through scoring and inflates the funnel. Require EITHER a
+      // concrete evidence string (>10 chars) OR a linkedin_url that gave us
+      // a founder-like title. Otherwise flip to null so downstream scoring
+      // treats the founder status as unknown, not confirmed.
       if (result && typeof result === "object") {
-        const evidence = (result as Record<string, unknown>).founder_evidence;
+        const r = result as Record<string, unknown>;
+        const evidence = r.founder_evidence;
         const hasEvidence = typeof evidence === "string" && evidence.trim().length > 10;
-        if ((result as Record<string, unknown>).is_likely_founder === true && !hasEvidence) {
-          (result as Record<string, unknown>).is_likely_founder = null;
-          (result as Record<string, unknown>).founder_evidence =
-            "Demoted: model claimed founder but provided no evidence string";
+        const linkedInTitle = String(row.owner_title_from_linkedin || "").toLowerCase();
+        const hasLinkedInFounderTitle =
+          !!row.linkedin_url &&
+          /\b(founder|co-?founder|owner|proprietor|president\s*(&|and)\s*(founder|owner))\b/.test(linkedInTitle);
+        if (r.is_likely_founder === true && !hasEvidence && !hasLinkedInFounderTitle) {
+          r.is_likely_founder = null;
+          r.founder_evidence =
+            "Demoted: no evidence string and no founder-like LinkedIn title";
         }
       }
 

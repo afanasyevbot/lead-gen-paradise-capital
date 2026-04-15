@@ -70,11 +70,30 @@ function richness(db: Database.Database, id: number): number {
 }
 
 type FkTable = { table: string; column: string };
-const FK_TABLES: FkTable[] = [
+// Tables with UNIQUE lead_id — must move OR delete (not both)
+const FK_TABLES_UNIQUE: FkTable[] = [
   { table: "scraped_content", column: "lead_id" },
   { table: "enrichment_data", column: "lead_id" },
   { table: "linkedin_data", column: "lead_id" },
   { table: "scoring_data", column: "lead_id" },
+  { table: "outreach_data", column: "lead_id" },
+  { table: "social_signals", column: "lead_id" },
+  { table: "content_hooks_raw", column: "lead_id" },
+  { table: "social_intros", column: "lead_id" },
+  { table: "content_hooks", column: "lead_id" },
+  { table: "founder_profiles", column: "lead_id" },
+  { table: "succession_news", column: "lead_id" },
+  { table: "legacy_outreach", column: "lead_id" },
+  { table: "succession_audits", column: "lead_id" },
+  { table: "tenure_legacy_emails", column: "lead_id" },
+  { table: "founder_emails", column: "lead_id" },
+];
+// Tables where lead_id is NOT unique — just repoint all rows to keeper
+const FK_TABLES_MULTI: FkTable[] = [
+  { table: "email_candidates", column: "lead_id" },
+  { table: "email_enrichment_runs", column: "lead_id" },
+  { table: "outreach_outcomes", column: "lead_id" },
+  { table: "lead_costs", column: "lead_id" },
 ];
 
 function tableExists(db: Database.Database, name: string): boolean {
@@ -85,14 +104,24 @@ function tableExists(db: Database.Database, name: string): boolean {
 }
 
 function mergeLead(db: Database.Database, keepId: number, loserId: number): void {
-  for (const fk of FK_TABLES) {
+  // UNIQUE FK tables: move loser's row to keeper only if keeper has none, else delete
+  for (const fk of FK_TABLES_UNIQUE) {
     if (!tableExists(db, fk.table)) continue;
-    // If loser has a row and keeper doesn't, move it. Otherwise drop the loser's row.
     const keepHas = db.prepare(`SELECT 1 FROM ${fk.table} WHERE ${fk.column} = ? LIMIT 1`).get(keepId);
     const loserHas = db.prepare(`SELECT 1 FROM ${fk.table} WHERE ${fk.column} = ? LIMIT 1`).get(loserId);
     if (loserHas && !keepHas) {
       db.prepare(`UPDATE ${fk.table} SET ${fk.column} = ? WHERE ${fk.column} = ?`).run(keepId, loserId);
     } else if (loserHas) {
+      db.prepare(`DELETE FROM ${fk.table} WHERE ${fk.column} = ?`).run(loserId);
+    }
+  }
+  // MULTI FK tables: just repoint everything
+  for (const fk of FK_TABLES_MULTI) {
+    if (!tableExists(db, fk.table)) continue;
+    try {
+      db.prepare(`UPDATE ${fk.table} SET ${fk.column} = ? WHERE ${fk.column} = ?`).run(keepId, loserId);
+    } catch {
+      // UNIQUE constraint (e.g., email_candidates unique on lead_id+email+provider) — drop dupes
       db.prepare(`DELETE FROM ${fk.table} WHERE ${fk.column} = ?`).run(loserId);
     }
   }
