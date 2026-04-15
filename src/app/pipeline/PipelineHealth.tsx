@@ -56,13 +56,21 @@ function CoverageBar({ s }: { s: StageCoverage }) {
 export default function PipelineHealth() {
   const [data, setData] = useState<HealthResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const r = await fetch("/api/pipeline/health");
-      if (r.ok) setData(await r.json());
+      if (!r.ok) {
+        setError(`Health endpoint returned ${r.status}: ${await r.text().catch(() => "")}`);
+        return;
+      }
+      setData(await r.json());
+    } catch (e) {
+      setError(String(e));
     } finally {
       setLoading(false);
     }
@@ -86,7 +94,15 @@ export default function PipelineHealth() {
     }
   }
 
-  if (!data && !loading) return null;
+  if (error) {
+    return (
+      <div className="border border-red-800 rounded-lg bg-red-950/40 p-4 mb-6 text-xs text-red-300">
+        <div className="font-semibold mb-1">Pipeline Health unavailable</div>
+        <div className="font-mono text-[11px] break-all">{error}</div>
+        <button onClick={load} className="mt-2 underline">Retry</button>
+      </div>
+    );
+  }
   if (!data) return <div className="text-xs text-[var(--muted)] mb-6">Loading pipeline health…</div>;
 
   const attentionTotal =
