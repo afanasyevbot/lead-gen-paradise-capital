@@ -167,7 +167,7 @@ export default function PipelinePage() {
         if (scoredCount > 0) {
           fetch(`/api/pipeline/scored-leads?limit=${scoredCount}`)
             .then((r) => r.json())
-            .then((d) => setScoredLeads(d.leads ?? []))
+            .then((d) => setScoredLeads((d.leads ?? []).sort((a: ScoredLead, b: ScoredLead) => b.score - a.score)))
             .catch(() => {});
         }
       }
