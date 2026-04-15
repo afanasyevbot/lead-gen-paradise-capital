@@ -9,7 +9,7 @@ export type { Lead, LeadFilters } from "@/domain/types";
 
 const DB_PATH =
   process.env.DATABASE_PATH ||
-  path.resolve(process.cwd(), "../paradise_leads.db");
+  path.resolve(process.cwd(), "paradise_leads.db");
 
 // Use global so the singleton is shared across all Next.js route bundles
 // (Turbopack compiles each route separately; module-level vars are not shared)
