@@ -97,7 +97,8 @@ export async function enrichLeads(
   const rows = db
     .prepare(
       `SELECT l.id, l.business_name, l.website, l.source, sc.all_text,
-              ld.linkedin_url, ld.owner_name_from_linkedin, ld.owner_title_from_linkedin, ld.linkedin_headline
+              ld.linkedin_url, ld.owner_name_from_linkedin, ld.owner_title_from_linkedin, ld.linkedin_headline,
+              ld.profile_data
        FROM leads l
        JOIN scraped_content sc ON sc.lead_id = l.id
        LEFT JOIN linkedin_data ld ON ld.lead_id = l.id
@@ -108,6 +109,7 @@ export async function enrichLeads(
       id: number; business_name: string; website: string; source: string; all_text: string;
       linkedin_url: string | null; owner_name_from_linkedin: string | null;
       owner_title_from_linkedin: string | null; linkedin_headline: string | null;
+      profile_data: string | null;
     }[];
 
   const counts = { enriched: 0, failed: 0 };
@@ -129,6 +131,21 @@ export async function enrichLeads(
           const hasLinkedIn = row.owner_name_from_linkedin || row.linkedin_headline;
           const isLinkedInOnly = !hasWebsite && hasLinkedIn;
 
+          // Parse LinkedIn profile_data (set by stage 16 profile visit) for experience/tenure
+          let linkedInExperience: Array<{ title: string; company: string; duration: string }> = [];
+          if (row.profile_data) {
+            try {
+              const pd = JSON.parse(row.profile_data);
+              if (Array.isArray(pd.experience)) linkedInExperience = pd.experience;
+            } catch { /* ignore */ }
+          }
+
+          const experienceBlock = linkedInExperience.length > 0
+            ? linkedInExperience.slice(0, 5).map((e) =>
+                `  • ${e.title} at ${e.company}${e.duration ? ` — ${e.duration}` : ""}`
+              ).join("\n")
+            : null;
+
           return `Extract business and ownership data from ${isLinkedInOnly ? "LinkedIn profile data" : "this website text and LinkedIn data"}.
 
 Business name from lead list: ${row.business_name}
@@ -139,7 +156,7 @@ Source: ${row.source}
 LinkedIn URL: ${row.linkedin_url || "Not found"}
 Owner name (from LinkedIn): ${row.owner_name_from_linkedin || "Not found"}
 Owner title (from LinkedIn): ${row.owner_title_from_linkedin || "Not found"}
-LinkedIn headline: ${row.linkedin_headline || "Not found"}
+LinkedIn headline: ${row.linkedin_headline || "Not found"}${experienceBlock ? `\nLinkedIn work history:\n${experienceBlock}\n\nIMPORTANT: Use work history start dates to estimate owner age. Example: "Owner at Carlson Printing Company · Sep 1996 - Present · 29 yrs 8 mos" means they started this role in 1996. If they were 25-35 when they founded the business, they are now ~55-65. Use this to set estimated_owner_age_range.` : ""}
 --- END LINKEDIN ---
 
 NOTE: LinkedIn title is a STRONG signal for founder detection. "Founder," "Owner/Founder," "President & Founder" = confirmed founder. "General Manager," "VP," "Director" = likely hired. Use the headline for career tenure clues (e.g. "30+ years in marine services").

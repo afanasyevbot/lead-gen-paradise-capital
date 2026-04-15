@@ -131,7 +131,8 @@ export async function scoreLeads(
   const rows = db
     .prepare(
       `SELECT l.*, ed.data as enrichment_json,
-              ld.linkedin_url, ld.owner_name_from_linkedin, ld.owner_title_from_linkedin, ld.linkedin_headline
+              ld.linkedin_url, ld.owner_name_from_linkedin, ld.owner_title_from_linkedin, ld.linkedin_headline,
+              ld.profile_data
        FROM leads l
        JOIN enrichment_data ed ON ed.lead_id = l.id
        LEFT JOIN linkedin_data ld ON ld.lead_id = l.id
@@ -142,6 +143,7 @@ export async function scoreLeads(
       id: number; business_name: string; enrichment_json: string;
       linkedin_url: string | null; owner_name_from_linkedin: string | null;
       owner_title_from_linkedin: string | null; linkedin_headline: string | null;
+      profile_data: string | null;
     })[];
 
   const counts = { scored: 0, failed: 0 };
@@ -213,6 +215,15 @@ LinkedIn URL: ${row.linkedin_url || "Not found"}
 LinkedIn name: ${row.owner_name_from_linkedin || "Not found"}
 LinkedIn title: ${row.owner_title_from_linkedin || "Not found"}
 LinkedIn headline: ${row.linkedin_headline || "Not found"}
+${(() => {
+  let exp: Array<{ title: string; company: string; duration: string }> = [];
+  if (row.profile_data) {
+    try { const pd = JSON.parse(row.profile_data); if (Array.isArray(pd.experience)) exp = pd.experience; } catch { /* ignore */ }
+  }
+  if (exp.length === 0) return "";
+  const lines = exp.slice(0, 5).map((e) => `  • ${e.title} at ${e.company}${e.duration ? ` — ${e.duration}` : ""}`).join("\n");
+  return `LinkedIn work history (use start dates to estimate age):\n${lines}\n`;
+})()}
 
 FAITH SIGNALS: ${enrichment.faith_signals || "None found"}
 
