@@ -1,6 +1,6 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
   "deploy": {
-    "startCommand": "echo 'token_len='$(echo -n \"$REPORT_TOKEN\" | wc -c) && curl -fS -X POST -H \"Authorization: Bearer $REPORT_TOKEN\" https://pure-art-production-a5e0.up.railway.app/api/admin/weekly-report && echo OK"
+    "startCommand": "curl -sSf -X POST -H \"Authorization: Bearer $REPORT_TOKEN\" https://pure-art-production-a5e0.up.railway.app/api/admin/weekly-report"
   }
 }
