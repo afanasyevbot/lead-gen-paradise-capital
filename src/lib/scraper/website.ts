@@ -1,6 +1,7 @@
 import { getDb, setLeadStatus } from "@/lib/db";
 import { acquireBrowser, releaseBrowser, randomUserAgent } from "@/infrastructure/scraper/browser-pool";
 import { harvestContactsFromPage } from "@/lib/scraper/email-harvester";
+import { withTimeout } from "@/lib/async/with-timeout";
 import type { ProgressCallback } from "@/domain/types";
 import type { Page } from "playwright";
 
@@ -9,16 +10,7 @@ const MAX_PAGE_TEXT = 6000;
 const MAX_TOTAL_TEXT = 28000;
 const HARD_TIMEOUT_MS = 45000; // 45s hard ceiling per site — kills hanging scrapes
 
-/** Wrap an async operation with an absolute timeout that rejects if exceeded. */
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`[TIMEOUT] ${label} exceeded ${ms}ms`)), ms);
-    promise.then(
-      (val) => { clearTimeout(timer); resolve(val); },
-      (err) => { clearTimeout(timer); reject(err); },
-    );
-  });
-}
+// withTimeout now imported from @/lib/async/with-timeout
 
 /**
  * Errors that mean the domain/site is permanently unreachable.

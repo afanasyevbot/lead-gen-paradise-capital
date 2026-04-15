@@ -26,14 +26,26 @@ export class WebsiteEmailProvider implements EmailProvider {
     const db = getDb();
     const domain = input.domain.replace(/^www\./, "").toLowerCase();
 
+    // Narrow the SQL match to variants that could only be the exact domain —
+    // avoids the `%smith.com%` over-match that pulled in `smithplumbing.com`.
+    // We still need the JS hostname verification to handle protocol/path noise.
     const candidates = db.prepare(
       `SELECT ed.data, l.id, l.website,
               sc.all_text, sc.homepage_text, sc.about_text, sc.emails_found
        FROM leads l
        JOIN enrichment_data ed ON ed.lead_id = l.id
        LEFT JOIN scraped_content sc ON sc.lead_id = l.id
-       WHERE l.website LIKE ?`
-    ).all(`%${domain}%`) as {
+       WHERE lower(l.website) LIKE ?
+          OR lower(l.website) LIKE ?
+          OR lower(l.website) LIKE ?
+          OR lower(l.website) LIKE ?
+       ORDER BY l.id ASC`
+    ).all(
+      `http://${domain}%`,
+      `https://${domain}%`,
+      `http://www.${domain}%`,
+      `https://www.${domain}%`,
+    ) as {
       data: string;
       id: number;
       website: string | null;
@@ -112,8 +124,8 @@ export class WebsiteEmailProvider implements EmailProvider {
 
     // ── Source 3: regex fallback ──────────────────────────────────────────
     if (row.all_text) {
-      const emailRegex = /[\w.+-]+@[\w-]+\.[a-z]{2,}/gi;
-      const found = row.all_text.match(emailRegex);
+      // Fresh regex per call — shared /../gi leaks lastIndex across callers.
+      const found = row.all_text.match(/[\w.+-]+@[\w-]+\.[a-z]{2,}/gi);
       if (found && found.length > 0) {
         const ranked = rankEmails(found, domain);
         const best = ranked[0];
