@@ -9,13 +9,7 @@ import { ensureLeadCostsTable } from "@/lib/cost-tracker";
  */
 export async function GET(req: NextRequest) {
   const db = getDb();
-  const sinceRaw = req.nextUrl.searchParams.get("since");
-  // SQLite stores datetime('now') as "YYYY-MM-DD HH:MM:SS" (space, no T, no Z).
-  // JS gives us ISO 8601 "YYYY-MM-DDTHH:MM:SS.mmmZ". Normalize to SQLite format
-  // so string comparisons work correctly.
-  const since = sinceRaw
-    ? sinceRaw.replace("T", " ").replace(/\.\d{3}Z$/, "").replace("Z", "")
-    : null;
+  const since = req.nextUrl.searchParams.get("since");
 
   const stats = db.prepare(`
     SELECT
@@ -61,7 +55,9 @@ export async function GET(req: NextRequest) {
     WHERE l.enrichment_status IN ('scored', 'outreach_generated')
   `).get() as Record<string, number>;
 
-  // Score distribution for this run (scoped by since)
+  // Score distribution for this run (scoped by since).
+  // Use datetime() on both sides so SQLite normalises ISO-8601 (T/Z) vs
+  // its own "YYYY-MM-DD HH:MM:SS" format — string comparison alone breaks.
   const thisRunScores = since ? (db.prepare(`
     SELECT
       SUM(CASE WHEN sd.score >= 8 THEN 1 ELSE 0 END) as score_8_plus,
@@ -70,14 +66,14 @@ export async function GET(req: NextRequest) {
       SUM(CASE WHEN sd.score < 5 THEN 1 ELSE 0 END) as score_below_5,
       COUNT(*) as total_scored
     FROM scoring_data sd
-    WHERE sd.created_at >= ?
+    WHERE datetime(sd.created_at) >= datetime(?)
   `).get(since) as Record<string, number>) : null;
 
   // ICP-rejected / filtered this run
   const thisRunFiltered = since ? (db.prepare(`
     SELECT COUNT(*) as count FROM leads
     WHERE enrichment_status IN ('icp_rejected', 'pre_filtered', 'no_website')
-      AND updated_at >= ?
+      AND datetime(updated_at) >= datetime(?)
   `).get(since) as { count: number }) : null;
 
   // Cost summary for this run (or all-time if no since param)
@@ -85,10 +81,10 @@ export async function GET(req: NextRequest) {
   try {
     ensureLeadCostsTable();
     const costRows = since
-      ? (db.prepare(`SELECT stage, SUM(cost_usd) as stage_cost, COUNT(DISTINCT lead_id) as lead_count FROM lead_costs WHERE created_at >= ? GROUP BY stage`).all(since) as { stage: string; stage_cost: number; lead_count: number }[])
+      ? (db.prepare(`SELECT stage, SUM(cost_usd) as stage_cost, COUNT(DISTINCT lead_id) as lead_count FROM lead_costs WHERE datetime(created_at) >= datetime(?) GROUP BY stage`).all(since) as { stage: string; stage_cost: number; lead_count: number }[])
       : (db.prepare(`SELECT stage, SUM(cost_usd) as stage_cost, COUNT(DISTINCT lead_id) as lead_count FROM lead_costs GROUP BY stage`).all() as { stage: string; stage_cost: number; lead_count: number }[]);
     const totalRow = since
-      ? (db.prepare(`SELECT SUM(cost_usd) as total, COUNT(DISTINCT lead_id) as leads FROM lead_costs WHERE created_at >= ?`).get(since) as { total: number | null; leads: number })
+      ? (db.prepare(`SELECT SUM(cost_usd) as total, COUNT(DISTINCT lead_id) as leads FROM lead_costs WHERE datetime(created_at) >= datetime(?)`).get(since) as { total: number | null; leads: number })
       : (db.prepare(`SELECT SUM(cost_usd) as total, COUNT(DISTINCT lead_id) as leads FROM lead_costs`).get() as { total: number | null; leads: number });
     costSummary = {
       total_usd: totalRow.total ?? 0,

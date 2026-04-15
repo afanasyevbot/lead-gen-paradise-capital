@@ -7,11 +7,7 @@ import { getDb } from "@/lib/db";
  */
 export async function GET(req: NextRequest) {
   const db = getDb();
-  const sinceRaw = req.nextUrl.searchParams.get("since");
-  // Normalize ISO 8601 → SQLite datetime format so string comparisons work
-  const since = sinceRaw
-    ? sinceRaw.replace("T", " ").replace(/\.\d{3}Z$/, "").replace("Z", "")
-    : null;
+  const since = req.nextUrl.searchParams.get("since");
 
   const query = since
     ? `
@@ -29,7 +25,7 @@ export async function GET(req: NextRequest) {
       FROM scoring_data sd
       JOIN leads l ON l.id = sd.lead_id
       LEFT JOIN enrichment_data ed ON ed.lead_id = sd.lead_id
-      WHERE sd.created_at >= ?
+      WHERE datetime(sd.created_at) >= datetime(?)
       ORDER BY sd.score DESC, l.business_name ASC
     `
     : `

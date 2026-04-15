@@ -249,41 +249,116 @@ function tryUrlPatterns(baseUrl: string): string[] {
   return TARGET_SLUGS.map((slug) => `${base}/${slug}`);
 }
 
-/**
- * Google search for a company's website using their business name.
- * Used for X-Ray leads that have a company name from LinkedIn but no website URL.
- */
-async function discoverWebsite(businessName: string, page: Page): Promise<string | null> {
-  const query = `"${businessName}" official website`;
-  const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
+const BLOCKED_DOMAINS = [
+  "google.com", "linkedin.com", "facebook.com", "instagram.com",
+  "twitter.com", "x.com", "yelp.com", "bbb.org", "yellowpages.com",
+  "mapquest.com", "angieslist.com", "houzz.com", "thumbtack.com",
+  "angi.com", "homeadvisor.com", "manta.com", "whitepages.com",
+  "bizapedia.com", "opencorporates.com", "crunchbase.com",
+];
 
+function isBlockedUrl(href: string): boolean {
+  try {
+    const host = new URL(href).hostname.replace(/^www\./, "");
+    return BLOCKED_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`));
+  } catch { return true; }
+}
+
+/**
+ * Run a single Google search query and return the first usable organic result URL.
+ * Returns null if rate-limited, no results, or all results are blocked directories.
+ */
+async function runGoogleSearch(query: string, page: Page): Promise<string | null> {
+  const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
   try {
     await page.goto(searchUrl, { waitUntil: "domcontentloaded", timeout: 15000 });
     await page.waitForTimeout(1500);
 
-    // Check for Google rate limiting
     const content = await page.content();
     if (content.includes("unusual traffic") || content.includes("captcha")) {
-      console.warn(`[WEBSITE DISCOVERY] Google rate limit hit for "${businessName}"`);
+      console.warn(`[WEBSITE DISCOVERY] Google rate limit hit — query: "${query}"`);
       return null;
     }
 
-    // Extract URLs from search results — look for organic result links
     const urls = await page.$$eval("div#search a[href]", (links) =>
-      links
-        .map((a) => (a as HTMLAnchorElement).href)
-        .filter((href) => href.startsWith("http") && !href.includes("google.com") && !href.includes("linkedin.com") && !href.includes("facebook.com") && !href.includes("yelp.com") && !href.includes("bbb.org") && !href.includes("yellowpages.com") && !href.includes("mapquest.com"))
+      links.map((a) => (a as HTMLAnchorElement).href).filter((h) => h.startsWith("http"))
     );
 
-    if (urls.length === 0) return null;
-
-    // Take the first non-social/directory result
-    const url = new URL(urls[0]);
-    return `${url.protocol}//${url.hostname}`;
+    for (const href of urls) {
+      if (!isBlockedUrl(href)) {
+        const url = new URL(href);
+        return `${url.protocol}//${url.hostname}`;
+      }
+    }
+    return null;
   } catch (err) {
-    console.error(`[WEBSITE DISCOVERY] Failed for "${businessName}":`, err);
+    console.error(`[WEBSITE DISCOVERY] Search failed — query: "${query}":`, err);
     return null;
   }
+}
+
+interface XRayLeadContext {
+  businessName: string;
+  ownerName?: string | null;
+  ownerTitle?: string | null;
+  city?: string | null;
+  state?: string | null;
+}
+
+/**
+ * Google search for a company's website using their business name.
+ * Used for X-Ray leads that have a company name from LinkedIn but no website URL.
+ * Tries a chain of progressively broader queries before giving up.
+ */
+async function discoverWebsite(ctx: XRayLeadContext, page: Page): Promise<string | null> {
+  const { businessName, ownerName, ownerTitle, city, state } = ctx;
+  const location = [city, state].filter(Boolean).join(", ");
+
+  // Build a fallback query chain — most specific first, broadest last
+  const queries: string[] = [];
+
+  // 1. Exact business name (original approach)
+  queries.push(`"${businessName}" official website`);
+
+  // 2. Business name + location (helps disambiguate common names)
+  if (location) queries.push(`"${businessName}" ${location} website`);
+
+  // 3. Owner name + title + location (useful when business_name is the person's name)
+  if (ownerName && ownerTitle && location) {
+    queries.push(`"${ownerName}" ${ownerTitle} ${location} company website`);
+  } else if (ownerName && location) {
+    queries.push(`"${ownerName}" ${location} company website`);
+  }
+
+  // 4. Owner name + title only (broadest — no location)
+  if (ownerName && ownerTitle) {
+    queries.push(`"${ownerName}" "${ownerTitle}" company site`);
+  } else if (ownerName) {
+    queries.push(`"${ownerName}" founder owner company`);
+  }
+
+  for (let i = 0; i < queries.length; i++) {
+    const query = queries[i];
+    let result: string | null = null;
+    try {
+      result = await runGoogleSearch(query, page);
+    } catch { /* continue to next query */ }
+
+    if (result) {
+      if (i > 0) {
+        console.log(`[WEBSITE DISCOVERY] Found via fallback query ${i + 1} for "${businessName}": ${result}`);
+      }
+      return result;
+    }
+
+    // Anti-detection delay between queries (skip after last attempt)
+    if (i < queries.length - 1) {
+      await new Promise((r) => setTimeout(r, 2000 + Math.random() * 2000));
+    }
+  }
+
+  console.log(`[WEBSITE DISCOVERY] All ${queries.length} queries exhausted for "${businessName}" — no website found`);
+  return null;
 }
 
 export async function scrapeLeadsWebsites(
