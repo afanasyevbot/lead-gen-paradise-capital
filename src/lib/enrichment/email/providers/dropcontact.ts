@@ -47,6 +47,7 @@ export class DropcontactEmailProvider implements EmailProvider {
         siren: false,
         language: "en",
       }),
+      signal: input.signal,
     });
 
     if (!submitRes.ok) return null;
@@ -59,10 +60,13 @@ export class DropcontactEmailProvider implements EmailProvider {
     // Poll for results
     const startTime = Date.now();
     while (Date.now() - startTime < MAX_POLL_MS) {
+      if (input.signal?.aborted) return null;
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      if (input.signal?.aborted) return null;
 
       const pollRes = await fetch(`https://api.dropcontact.com/batch/${requestId}`, {
         headers: { "X-Access-Token": apiKey },
+        signal: input.signal,
       });
 
       if (!pollRes.ok) continue;

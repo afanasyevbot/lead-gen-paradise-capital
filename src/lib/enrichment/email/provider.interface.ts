@@ -7,6 +7,12 @@ export interface EmailLookupInput {
   lastName?: string | null;
   title?: string | null;
   companyName?: string | null;
+  /**
+   * Optional abort signal. When the waterfall's per-provider timeout fires,
+   * this signal is aborted so provider `fetch()` calls can release their
+   * sockets immediately instead of waiting for upstream to respond.
+   */
+  signal?: AbortSignal;
 }
 
 export interface EmailLookupResult {

@@ -19,7 +19,30 @@ const JOBS_SCHEMA = `
 `;
 
 function ensureJobsTable() {
-  getDb().exec(JOBS_SCHEMA);
+  const db = getDb();
+  db.exec(JOBS_SCHEMA);
+  // Heartbeat column for stale-lock detection. Idempotent.
+  try {
+    const cols = db.prepare("PRAGMA table_info(pipeline_jobs)").all() as { name: string }[];
+    if (!cols.some((c) => c.name === "updated_at")) {
+      db.exec("ALTER TABLE pipeline_jobs ADD COLUMN updated_at TEXT");
+    }
+  } catch { /* ignore */ }
+}
+
+/** Most recent heartbeat timestamp for a running job, or null. */
+export function lastJobHeartbeatAt(): string | null {
+  try {
+    ensureJobsTable();
+    const row = getDb()
+      .prepare(
+        "SELECT updated_at FROM pipeline_jobs WHERE status = 'running' ORDER BY started_at DESC LIMIT 1"
+      )
+      .get() as { updated_at: string | null } | undefined;
+    return row?.updated_at ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -56,10 +79,10 @@ export function createJob(type: JobType): Job {
 
   getDb()
     .prepare(
-      `INSERT INTO pipeline_jobs (id, type, status, progress, started_at)
-       VALUES (?, ?, 'running', ?, ?)`
+      `INSERT INTO pipeline_jobs (id, type, status, progress, started_at, updated_at)
+       VALUES (?, ?, 'running', ?, ?, ?)`
     )
-    .run(id, type, JSON.stringify(progress), startedAt);
+    .run(id, type, JSON.stringify(progress), startedAt, startedAt);
 
   return { id, type, status: "running", progress, startedAt };
 }
@@ -73,7 +96,7 @@ export function updateJobProgress(id: string, progress: Partial<JobProgress>) {
     if (!row) return;
     const current: JobProgress = JSON.parse(row.progress);
     const updated = { ...current, ...progress };
-    db.prepare("UPDATE pipeline_jobs SET progress = ? WHERE id = ?").run(JSON.stringify(updated), id);
+    db.prepare("UPDATE pipeline_jobs SET progress = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(updated), id);
   } catch { /* best-effort */ }
 }
 

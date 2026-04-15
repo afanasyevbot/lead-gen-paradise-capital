@@ -57,6 +57,7 @@ export class PDLEmailProvider implements EmailProvider {
         sql: sqlQuery,
         size: 5,
       }),
+      signal: input.signal,
     });
 
     // 402 = credits exhausted; 404 = not found — both are graceful no-ops

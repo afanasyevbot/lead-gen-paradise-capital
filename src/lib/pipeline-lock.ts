@@ -7,6 +7,10 @@
  *   2. Call releaseLock() in a finally block when done
  */
 import { getDb } from "@/lib/db";
+import { lastJobHeartbeatAt } from "@/lib/jobs";
+
+const STALE_LOCK_MINUTES = 30; // any lock older than 30 min is assumed crashed
+const STALE_HEARTBEAT_MINUTES = 5; // no progress update in 5 min = stuck
 
 const LOCK_TABLE = `
   CREATE TABLE IF NOT EXISTS pipeline_lock (
@@ -30,14 +34,38 @@ export function acquireLock(pipelineName: string): void {
   ensureLockTable();
   const db = getDb();
 
-  // Auto-release stale locks before trying to acquire
+  // Auto-release stale locks before trying to acquire. Two criteria:
+  //   1. Hard ceiling: lock older than STALE_LOCK_MINUTES (assume crashed)
+  //   2. Heartbeat-based: no job progress update in STALE_HEARTBEAT_MINUTES
+  //      (catches pipelines killed mid-stage where finally never ran)
   const existing = db.prepare("SELECT locked, locked_by, locked_at FROM pipeline_lock WHERE id = 1").get() as
     | { locked: number; locked_by: string | null; locked_at: string | null }
     | undefined;
   if (existing?.locked === 1 && existing.locked_at) {
-    const ageMinutes = (Date.now() - new Date(existing.locked_at).getTime()) / 60000;
-    if (ageMinutes > STALE_LOCK_MINUTES) {
-      console.warn(`[PIPELINE LOCK] Stale lock detected at acquireLock — auto-releasing "${existing.locked_by}" (${Math.round(ageMinutes)}min old)`);
+    const lockAgeMin = (Date.now() - new Date(existing.locked_at).getTime()) / 60000;
+    let shouldRelease = false;
+    let reason = "";
+
+    if (lockAgeMin > STALE_LOCK_MINUTES) {
+      shouldRelease = true;
+      reason = `lock age ${Math.round(lockAgeMin)}min > ${STALE_LOCK_MINUTES}min`;
+    } else {
+      const heartbeat = lastJobHeartbeatAt();
+      if (heartbeat) {
+        const hbAgeMin = (Date.now() - new Date(heartbeat).getTime()) / 60000;
+        if (hbAgeMin > STALE_HEARTBEAT_MINUTES) {
+          shouldRelease = true;
+          reason = `heartbeat silent for ${Math.round(hbAgeMin)}min > ${STALE_HEARTBEAT_MINUTES}min`;
+        }
+      } else if (lockAgeMin > STALE_HEARTBEAT_MINUTES) {
+        // Lock held but no running job exists at all → definitely stale
+        shouldRelease = true;
+        reason = `no running job record, lock ${Math.round(lockAgeMin)}min old`;
+      }
+    }
+
+    if (shouldRelease) {
+      console.warn(`[PIPELINE LOCK] Auto-releasing "${existing.locked_by}" — ${reason}`);
       releaseLock();
     }
   }
@@ -79,8 +107,6 @@ export function isLocked(): boolean {
     return false;
   }
 }
-
-const STALE_LOCK_MINUTES = 120; // any pipeline running >2 hours is assumed crashed
 
 export function getLockStatus(): {
   locked: boolean;

@@ -101,20 +101,25 @@ export class WaterfallEmailFinder {
 
     // Hard per-provider timeout. Prevents a single slow/hanging provider
     // (exhausted quota, rate-limit backoff, DNS failure) from eating 10–30s.
-    // NOTE: in-flight HTTP sockets from the aborted provider may continue
-    // running until the upstream responds — providers that take AbortSignal
-    // should be wired via the provider.interface in a follow-up. For now the
-    // timeout at least caps wall-clock time.
+    // Each provider gets its own AbortController; on timeout we abort so the
+    // underlying fetch() releases its socket immediately instead of waiting
+    // for upstream to respond.
     const PROVIDER_TIMEOUT_MS = 5000;
 
     for (const provider of this.providers) {
       providersAttempted.push(provider.name);
 
+      const controller = new AbortController();
       try {
         // Website provider is local DB read — give it more headroom so the
         // harvester's stored-content fallback can finish even on large text.
         const timeout = provider.name === "website" ? 15000 : PROVIDER_TIMEOUT_MS;
-        const result = await withTimeout(provider.lookup(input), timeout, provider.name);
+        const result = await withTimeout(
+          provider.lookup({ ...input, signal: controller.signal }),
+          timeout,
+          provider.name,
+          () => controller.abort(),
+        );
 
         if (result && !seenEmails.has(result.email.toLowerCase())) {
           seenEmails.add(result.email.toLowerCase());

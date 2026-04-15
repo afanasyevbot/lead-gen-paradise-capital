@@ -21,7 +21,7 @@ export class SnovEmailProvider implements EmailProvider {
   }
 
   async lookup(input: EmailLookupInput): Promise<EmailLookupResult | null> {
-    const token = await this.getAccessToken();
+    const token = await this.getAccessToken(input.signal);
     if (!token) return null;
 
     // Try name + domain search
@@ -49,6 +49,7 @@ export class SnovEmailProvider implements EmailProvider {
         lastName,
         domain: input.domain,
       }),
+      signal: input.signal,
     });
 
     if (!res.ok) return null;
@@ -85,6 +86,7 @@ export class SnovEmailProvider implements EmailProvider {
         domain: input.domain,
         limit: 10,
       }),
+      signal: input.signal,
     });
 
     if (!res.ok) return null;
@@ -115,7 +117,7 @@ export class SnovEmailProvider implements EmailProvider {
     };
   }
 
-  private async getAccessToken(): Promise<string | null> {
+  private async getAccessToken(signal?: AbortSignal): Promise<string | null> {
     if (cachedAccessToken && Date.now() < tokenExpiresAt) {
       return cachedAccessToken;
     }
@@ -133,6 +135,7 @@ export class SnovEmailProvider implements EmailProvider {
           client_id: clientId,
           client_secret: clientSecret,
         }),
+        signal,
       });
 
       if (!res.ok) return null;
