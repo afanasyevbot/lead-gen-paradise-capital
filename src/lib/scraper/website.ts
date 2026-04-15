@@ -3,9 +3,9 @@ import { acquireBrowser, releaseBrowser, randomUserAgent } from "@/infrastructur
 import type { ProgressCallback } from "@/domain/types";
 import type { Page } from "playwright";
 
-const TARGET_SLUGS = ["about", "about-us", "our-story", "our-team", "team", "leadership", "history", "company"];
-const MAX_PAGE_TEXT = 8000;
-const MAX_TOTAL_TEXT = 20000;
+const TARGET_SLUGS = ["contact", "contact-us", "about", "about-us", "our-story", "our-team", "team", "leadership", "history", "company", "services"];
+const MAX_PAGE_TEXT = 6000;
+const MAX_TOTAL_TEXT = 28000;
 const HARD_TIMEOUT_MS = 45000; // 45s hard ceiling per site — kills hanging scrapes
 
 /** Wrap an async operation with an absolute timeout that rejects if exceeded. */
@@ -206,6 +206,10 @@ async function findAboutLinks(page: import("playwright").Page, baseUrl: string):
     "about", "about us", "our story", "our team", "team",
     "leadership", "history", "company", "who we are", "meet the team",
     "our company", "about the company", "founders", "owner",
+    // Contact pages — emails and direct contact info live here
+    "contact", "contact us", "get in touch", "reach us", "reach out",
+    // Services pages — revenue signals and business scope
+    "services", "our services", "what we do",
   ]);
 
   let links: { href: string; text: string }[] = [];
@@ -241,7 +245,13 @@ async function findAboutLinks(page: import("playwright").Page, baseUrl: string):
   }
 
   if (found.length === 0) return tryUrlPatterns(baseUrl);
-  return found.slice(0, 5);
+
+  // Prioritize contact pages first (emails!), then about/team pages
+  found.sort((a, b) => {
+    const score = (u: string) => /contact|reach|touch/i.test(u) ? -1 : 0;
+    return score(a) - score(b);
+  });
+  return found.slice(0, 7);
 }
 
 function tryUrlPatterns(baseUrl: string): string[] {
