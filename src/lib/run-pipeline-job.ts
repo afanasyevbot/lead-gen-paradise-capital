@@ -36,7 +36,9 @@ export function launchPipelineJob(
       });
       completeJob(job.id, result.metrics);
     } catch (e) {
-      failJob(job.id, String(e));
+      const msg = e instanceof Error ? `${e.message}\n${e.stack ?? ""}` : String(e);
+      console.error(`[PIPELINE] Job ${job.id} failed:`, msg);
+      failJob(job.id, e instanceof Error ? e.message : String(e));
     } finally {
       releaseLock();
     }

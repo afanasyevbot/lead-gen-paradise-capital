@@ -70,8 +70,9 @@ export function getProxyConfig(): { server: string; username?: string; password?
  * Acquire a shared browser instance. Launches Chromium on first call.
  * Increments the reference count. Uses PROXY_URL env var if set.
  */
+const BROWSER_LAUNCH_TIMEOUT_MS = 30_000; // 30s max to launch Chromium
+
 export async function acquireBrowser(): Promise<Browser> {
-  // Fix #2: Log pool wait time to detect pool exhaustion
   const waitStart = Date.now();
   if (!browser || !browser.isConnected()) {
     const { chromium } = await import("playwright");
@@ -79,10 +80,14 @@ export async function acquireBrowser(): Promise<Browser> {
     if (proxy) {
       console.log(`[BROWSER POOL] Launching with proxy: ${proxy.server}`);
     }
-    browser = await chromium.launch({
+    const launchPromise = chromium.launch({
       headless: true,
       ...(proxy ? { proxy } : {}),
     });
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`[BROWSER POOL] chromium.launch() timed out after ${BROWSER_LAUNCH_TIMEOUT_MS / 1000}s`)), BROWSER_LAUNCH_TIMEOUT_MS)
+    );
+    browser = await Promise.race([launchPromise, timeoutPromise]);
   }
   const waitMs = Date.now() - waitStart;
   if (waitMs > 2000) {

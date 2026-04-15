@@ -54,6 +54,26 @@ export function validateScoringResponse(parsed: unknown): void {
     throw new Error(`Invalid recommended_action: ${JSON.stringify(r.recommended_action)}`);
   }
   r.recommended_action = rawAction; // normalize in-place
+
+  // Normalize gate booleans so score.ts gates always fire correctly.
+  // Coerce string "true"/"false" and truthy values to real booleans.
+  const toBool = (v: unknown): boolean | undefined => {
+    if (typeof v === "boolean") return v;
+    if (typeof v === "string") {
+      const s = v.toLowerCase().trim();
+      if (s === "true") return true;
+      if (s === "false") return false;
+    }
+    return undefined;
+  };
+  const founder = toBool(r.is_likely_founder);
+  if (founder !== undefined) r.is_likely_founder = founder;
+
+  const tooSmall = toBool(r.revenue_too_small);
+  if (tooSmall !== undefined) r.revenue_too_small = tooSmall;
+
+  const tooLarge = toBool(r.revenue_too_large);
+  if (tooLarge !== undefined) r.revenue_too_large = tooLarge;
 }
 
 /**
