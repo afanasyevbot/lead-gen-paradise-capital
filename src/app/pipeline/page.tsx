@@ -497,12 +497,13 @@ export default function PipelinePage() {
                             {lead.city && (
                               <span className="text-xs text-[var(--muted)] shrink-0">{lead.city}{lead.state ? `, ${lead.state}` : ""}</span>
                             )}
-                            <span className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${
-                              lead.confidence === "high" ? "bg-green-900/50 text-green-400" :
-                              lead.confidence === "medium" ? "bg-yellow-900/50 text-yellow-400" :
+                            <span className={`text-xs font-bold px-2 py-0.5 rounded shrink-0 ${
+                              lead.score >= 8 ? "bg-green-900/60 text-green-400" :
+                              lead.score >= 7 ? "bg-green-900/40 text-green-300" :
+                              lead.score >= 5 ? "bg-yellow-900/50 text-yellow-400" :
                               "bg-[var(--border)] text-[var(--muted)]"
                             }`}>
-                              {lead.confidence}
+                              {lead.score}/10
                             </span>
                             <span className="text-[var(--muted)] text-xs shrink-0">{isExpanded ? "▲" : "▼"}</span>
                           </button>
