@@ -179,10 +179,39 @@ export const SEARCH_PRESETS: Record<string, string[]> = {
   ],
 };
 
+// Structural chain/franchise hints — words that almost never appear in
+// single-founder businesses. Used for multi-signal chain detection.
+const CHAIN_KEYWORDS = [
+  "franchise", "franchisee", "franchising",
+  "locations nationwide", "national chain", "corporate headquarters",
+  "owned and operated by independent", // standard franchise disclaimer
+];
+
 export function isChain(name: string): boolean {
   const lower = name.toLowerCase().trim();
   for (const chain of KNOWN_CHAINS) {
     if (lower.includes(chain)) return true;
   }
+  return false;
+}
+
+/**
+ * Multi-signal chain detection. Use when you have more than just a name —
+ * e.g. scraped text or review counts. Avoids the 1000-review hard cutoff
+ * which burned legitimate $20M+ founder businesses with lots of reviews.
+ */
+export function looksLikeChain(opts: {
+  name: string;
+  reviewCount?: number;
+  scrapedText?: string | null;
+}): boolean {
+  if (isChain(opts.name)) return true;
+  const text = (opts.scrapedText || "").toLowerCase();
+  const hits = CHAIN_KEYWORDS.filter((kw) => text.includes(kw)).length;
+  // 500+ reviews alone is no longer disqualifying, but combined with a
+  // franchise keyword in scraped text it's a strong signal.
+  if ((opts.reviewCount ?? 0) >= 500 && hits >= 1) return true;
+  // Two independent franchise-language hits is enough on its own.
+  if (hits >= 2) return true;
   return false;
 }

@@ -24,7 +24,7 @@ export interface XRaySearchOptions {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function makePlaceId(linkedinUrl: string): string {
-  return createHash("sha256").update(`xray|${linkedinUrl.toLowerCase()}`).digest("hex").slice(0, 16);
+  return createHash("sha256").update(`xray|${linkedinUrl.toLowerCase()}`).digest("hex").slice(0, 32);
 }
 
 /**

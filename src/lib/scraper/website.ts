@@ -493,7 +493,7 @@ export async function scrapeLeadsWebsites(
       continue;
     }
 
-    if (result.error || result.total_text_length < 50) {
+    if (result.error || result.total_text_length < 150) {
       counts.failed++;
       if (result.terminalError) {
         try { setLeadStatus(lead.id, "no_website"); } catch { /* ignore */ }
@@ -542,7 +542,7 @@ export async function scrapeLeadWebsiteById(
     return { success: false, error: `Scrape timed out: ${String(e)}` };
   }
 
-  if (result.error || result.total_text_length < 50) {
+  if (result.error || result.total_text_length < 150) {
     if (result.terminalError) {
       try { setLeadStatus(lead.id, "no_website"); } catch {
         db.prepare("UPDATE leads SET enrichment_status = 'no_website', updated_at = datetime('now') WHERE id = ?").run(lead.id);

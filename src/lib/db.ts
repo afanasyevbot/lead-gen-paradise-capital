@@ -557,13 +557,62 @@ export function getStats() {
   };
 }
 
+// Cross-source dedup key — same business discovered via Google Maps and
+// LinkedIn X-Ray should collide, even though their place_id hashes differ.
+// Key is website hostname when available, otherwise normalized business name
+// + city. Not cryptographically strong — just stable.
+function normalizedKey(lead: Record<string, unknown>): string | null {
+  const website = (lead.website as string | null) || null;
+  if (website) {
+    try {
+      const host = new URL(website.startsWith("http") ? website : `https://${website}`)
+        .hostname.replace(/^www\./, "").toLowerCase();
+      if (host) return `host:${host}`;
+    } catch { /* fall through */ }
+  }
+  const name = String(lead.business_name || "").toLowerCase().trim()
+    .replace(/[,.]/g, " ")
+    .replace(/\b(llc|inc|incorporated|corp|corporation|co|company|ltd|limited|pllc|pc|pa|llp|lp)\b\.?/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const city = String(lead.city || "").toLowerCase().trim();
+  if (!name) return null;
+  return `name:${name}|${city}`;
+}
+
 export function upsertLead(lead: Record<string, unknown>): boolean {
   const db = getDb();
   const now = new Date().toISOString();
 
-  const existing = db
+  // Primary dedup: place_id hash (deterministic for same-source rediscovery).
+  let existing = db
     .prepare("SELECT id FROM leads WHERE place_id = ?")
     .get(lead.place_id as string) as { id: number } | undefined;
+
+  // Secondary dedup: normalized key (collapses cross-source duplicates —
+  // e.g. same business from Google Maps AND LinkedIn X-Ray).
+  if (!existing) {
+    const key = normalizedKey(lead);
+    if (key) {
+      const byKey = db
+        .prepare(`
+          SELECT id, place_id FROM leads
+          WHERE (
+            (website IS NOT NULL AND website != ''
+             AND lower(replace(replace(replace(website, 'https://', ''), 'http://', ''), 'www.', '')) LIKE ?)
+            OR
+            (lower(business_name) = ? AND lower(COALESCE(city, '')) = ?)
+          )
+          LIMIT 1
+        `)
+        .get(
+          key.startsWith("host:") ? `${key.slice(5)}%` : "___no_match___",
+          String(lead.business_name || "").toLowerCase().trim(),
+          String(lead.city || "").toLowerCase().trim(),
+        ) as { id: number; place_id: string } | undefined;
+      if (byKey) existing = { id: byKey.id };
+    }
+  }
 
   if (existing) {
     db.prepare(`

@@ -11,25 +11,37 @@ export async function GET(req: NextRequest) {
   // scored N leads — avoids all timestamp format comparison issues.
   const limitParam = req.nextUrl.searchParams.get("limit");
   const limit = limitParam ? Math.max(1, Math.min(500, parseInt(limitParam, 10))) : 100;
+  const since = req.nextUrl.searchParams.get("since"); // ISO timestamp
 
-  const rows = db.prepare(`
-      SELECT
-        l.id,
-        l.business_name,
-        l.website,
-        l.city,
-        l.state,
-        sd.score,
-        sd.confidence,
-        sd.recommended_action,
-        sd.data as score_data,
-        ed.data as enrichment_data
-      FROM scoring_data sd
-      JOIN leads l ON l.id = sd.lead_id
-      LEFT JOIN enrichment_data ed ON ed.lead_id = sd.lead_id
-      ORDER BY sd.created_at DESC
-      LIMIT ?
-    `).all(limit) as RawRow[];
+  // When `since` is provided, scope results to leads scored AFTER that
+  // timestamp — the dashboard passes the run's start time so we only show
+  // leads from the current pipeline execution, not every historical lead.
+  const rows = since
+    ? db.prepare(`
+        SELECT
+          l.id, l.business_name, l.website, l.city, l.state,
+          sd.score, sd.confidence, sd.recommended_action,
+          sd.data as score_data,
+          ed.data as enrichment_data
+        FROM scoring_data sd
+        JOIN leads l ON l.id = sd.lead_id
+        LEFT JOIN enrichment_data ed ON ed.lead_id = sd.lead_id
+        WHERE sd.created_at >= ?
+        ORDER BY sd.created_at DESC
+        LIMIT ?
+      `).all(since, limit) as RawRow[]
+    : db.prepare(`
+        SELECT
+          l.id, l.business_name, l.website, l.city, l.state,
+          sd.score, sd.confidence, sd.recommended_action,
+          sd.data as score_data,
+          ed.data as enrichment_data
+        FROM scoring_data sd
+        JOIN leads l ON l.id = sd.lead_id
+        LEFT JOIN enrichment_data ed ON ed.lead_id = sd.lead_id
+        ORDER BY sd.created_at DESC
+        LIMIT ?
+      `).all(limit) as RawRow[];
 
   const leads = rows.map((row) => {
     let scoreData: Record<string, unknown> = {};

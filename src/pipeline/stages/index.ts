@@ -171,9 +171,13 @@ export const COST_AWARE_STAGES: PipelineStage[] = [
   scrapeStage,          // free — Playwright
   linkedinStage,        // free — Google X-Ray for LinkedIn URL + owner name
   icpScreenStage,       // Haiku — ICP yes/no
+  // Profile visit BEFORE extraction so extract + score both see the real
+  // LinkedIn work history (tenure, founder-role start year). Previously
+  // placed after scoring, which meant age estimation and founder detection
+  // ran on shallow snippet data and frequently missed obvious founders.
+  linkedinProfileStage, // free — deep profile visit, fills experience/education
   extractStage,         // Haiku — structured extraction (ICP-confirmed only)
   scoreStage,           // Haiku — exit-readiness score
   emailFinderStage,     // waterfall — only picks up leads with status scored+
-  linkedinProfileStage, // free — visit actual profile (only 6+ scored leads, requires cookie)
   outreachStage,        // Sonnet — only leads scoring >= minScore (default 7)
 ];

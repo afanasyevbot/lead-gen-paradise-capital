@@ -32,9 +32,18 @@ const AVOID_KEYWORDS = [
   "memorial chapel", "mortuary",
 ];
 
+// Compile word-boundary regexes once. Substring matching was flagging
+// legitimate leads (e.g. "Barber Industrial Supply" hitting "barber",
+// "Therapy Equipment Co" hitting "therapy", "Spa Pool Co" hitting "spa ").
+const AVOID_PATTERNS = AVOID_KEYWORDS.map((kw) => {
+  const trimmed = kw.trim();
+  // Escape regex metacharacters and use \b word boundaries around the whole phrase
+  const escaped = trimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`\\b${escaped}\\b`, "i");
+});
+
 function isAvoided(businessName: string): boolean {
-  const lower = businessName.toLowerCase();
-  return AVOID_KEYWORDS.some((kw) => lower.includes(kw));
+  return AVOID_PATTERNS.some((re) => re.test(businessName));
 }
 
 /**
@@ -48,7 +57,9 @@ function isAvoided(businessName: string): boolean {
  * - PCAP avoidance list (main street, healthcare, funeral)
  * - No website AND fewer than 10 reviews (almost certainly not $5M+)
  * - Fewer than 3 reviews total (too small / not established)
- * - Review count >= 1000 (franchise / chain-level volume)
+ * (high review counts alone are NOT disqualifying — legit $20M+ founder
+ *  businesses can have 500+ reviews. Chain detection uses multi-signal
+ *  matching in `looksLikeChain` downstream, not a raw review threshold.)
  */
 export const preFilterStage: PipelineStage = {
   name: "pre-filter",

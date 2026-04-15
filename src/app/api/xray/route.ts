@@ -31,8 +31,22 @@ export const XRAY_INDUSTRY_PRESETS: Record<string, string[]> = {
   "waste":               ["waste management", "junk removal"],
 };
 
-// Default founder/owner titles to search for
-const DEFAULT_TITLES = ["founder", "owner", "president", "co-founder", "co-owner"];
+// Default founder/owner titles to search for. Expanded to catch business
+// owners who don't use "founder" in their LinkedIn title — common in trades
+// (principal, proprietor, managing partner) and first-generation owners
+// (CEO, head, general manager/owner).
+const DEFAULT_TITLES = [
+  "founder",
+  "co-founder",
+  "owner",
+  "co-owner",
+  "president",
+  "principal",
+  "proprietor",
+  "managing partner",
+  "managing director",
+  "CEO",
+];
 
 /**
  * Pre-populate linkedin_data for a freshly upserted X-Ray lead.

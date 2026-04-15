@@ -15,7 +15,11 @@ import type { PipelineStage, PipelineContext, StageResult } from "../stage.inter
 import { visitLinkedInProfile, hasLinkedInSession } from "@/lib/scraper/linkedin-profile";
 import { getDb } from "@/lib/db";
 
-const MIN_SCORE_FOR_VISIT = 6;
+// Kept for reference but no longer used — stage now runs BEFORE scoring so
+// that extract + score can use real LinkedIn work history for age estimation
+// and founder detection. ICP screen (stage 00b) is the upstream quality gate.
+const _MIN_SCORE_FOR_VISIT = 6;
+void _MIN_SCORE_FOR_VISIT;
 const CONCURRENCY = 1; // LinkedIn is sensitive — run sequentially
 
 export const linkedinProfileStage: PipelineStage = {
@@ -41,19 +45,21 @@ export const linkedinProfileStage: PipelineStage = {
       db.exec(`ALTER TABLE linkedin_data ADD COLUMN profile_visited_at TEXT`);
     } catch { /* column already exists */ }
 
-    // Fetch leads that have a LinkedIn URL, score 6+, and haven't been visited yet
+    // Fetch leads that have a LinkedIn URL and haven't been visited yet.
+    // The ICP screen (stage 00b) has already filtered out obvious non-ICP
+    // leads, so everything remaining is worth the profile-visit cost.
+    // Ordering: prefer leads that reached 'scraped' status (ICP passed).
     const rows = db.prepare(`
       SELECT l.id, l.business_name, ld.linkedin_url
       FROM leads l
       JOIN linkedin_data ld ON ld.lead_id = l.id
-      JOIN scoring_data sd ON sd.lead_id = l.id
       WHERE ld.linkedin_url IS NOT NULL
         AND ld.linkedin_url != ''
         AND (ld.profile_visited_at IS NULL)
-        AND sd.score >= ?
-      ORDER BY sd.score DESC
+        AND l.enrichment_status IN ('scraped', 'enriched', 'scored')
+      ORDER BY l.id DESC
       LIMIT ?
-    `).all(MIN_SCORE_FOR_VISIT, ctx.limit) as {
+    `).all(ctx.limit) as {
       id: number;
       business_name: string;
       linkedin_url: string;

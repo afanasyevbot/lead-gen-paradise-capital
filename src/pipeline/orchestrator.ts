@@ -39,9 +39,17 @@ export async function runPipeline(
       Object.assign(result.metrics, stageResult);
       result.stagesCompleted++;
     } catch (err) {
-      result.failedStage = stage.name;
+      // Record the failure but DON'T halt the whole pipeline. One bad stage
+      // (e.g. LinkedIn rate-limited) shouldn't block scoring / outreach for
+      // leads that already have enough data to proceed. Downstream stages
+      // filter by enrichment_status so they'll naturally skip leads that
+      // haven't reached the prerequisite step yet.
+      console.error(`[PIPELINE] Stage "${stage.name}" failed:`, err);
+      // metrics is Record<string, number>, so store the failure as a 1-count
+      // flag; the human-readable message lives on result.error / failedStage.
+      result.metrics[`${stage.name}_error`] = 1;
+      if (!result.failedStage) result.failedStage = stage.name;
       result.error = String(err);
-      throw err; // Re-throw so the job runner can mark the job as failed.
     }
   }
 

@@ -38,7 +38,7 @@ const PRESET_LABELS: Record<string, string> = {
 export default function XRayPage() {
   const [presets, setPresets] = useState<Record<string, string[]>>({});
   const [industry, setIndustry] = useState("hvac");
-  const [locations, setLocations] = useState("Tampa, Florida\nMiami, Florida\nOrlando, Florida");
+  const [locations, setLocations] = useState("");
   const [titlesInput, setTitlesInput] = useState(DEFAULT_TITLES.join(", "));
   const [maxPerSearch, setMaxPerSearch] = useState(30);
   const [job, setJob] = useState<Job | null>(null);

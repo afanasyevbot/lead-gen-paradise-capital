@@ -12,6 +12,8 @@ export type EnrichmentStatus =
   | "outreach_failed"  // Claude failed during outreach generation — distinguishable from "not yet attempted"
   | "pre_filtered"     // eliminated by rule-based pre-filter (chain, micro-biz, etc.)
   | "icp_rejected"     // eliminated by Haiku ICP screen (wrong industry/size)
+  | "icp_parse_error"  // ICP screen response unparseable — needs manual review
+  | "icp_screen_error" // ICP screen API call failed — retryable
   | "no_website";      // lead has no website — cannot be scraped or enriched
 
 // ─── Recommended Actions ────────────────────────────────────────────────────
