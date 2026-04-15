@@ -7,10 +7,12 @@ import { getDb } from "@/lib/db";
  */
 export async function GET(req: NextRequest) {
   const db = getDb();
-  const since = req.nextUrl.searchParams.get("since");
+  // Use `limit` (count of leads scored this run) to fetch the most recently
+  // scored N leads — avoids all timestamp format comparison issues.
+  const limitParam = req.nextUrl.searchParams.get("limit");
+  const limit = limitParam ? Math.max(1, Math.min(500, parseInt(limitParam, 10))) : 100;
 
-  const query = since
-    ? `
+  const rows = db.prepare(`
       SELECT
         l.id,
         l.business_name,
@@ -25,31 +27,9 @@ export async function GET(req: NextRequest) {
       FROM scoring_data sd
       JOIN leads l ON l.id = sd.lead_id
       LEFT JOIN enrichment_data ed ON ed.lead_id = sd.lead_id
-      WHERE datetime(sd.created_at) >= datetime(?)
-      ORDER BY sd.score DESC, l.business_name ASC
-    `
-    : `
-      SELECT
-        l.id,
-        l.business_name,
-        l.website,
-        l.city,
-        l.state,
-        sd.score,
-        sd.confidence,
-        sd.recommended_action,
-        sd.data as score_data,
-        ed.data as enrichment_data
-      FROM scoring_data sd
-      JOIN leads l ON l.id = sd.lead_id
-      LEFT JOIN enrichment_data ed ON ed.lead_id = sd.lead_id
-      ORDER BY sd.score DESC, l.business_name ASC
-      LIMIT 100
-    `;
-
-  const rows = since
-    ? (db.prepare(query).all(since) as RawRow[])
-    : (db.prepare(query).all() as RawRow[]);
+      ORDER BY sd.created_at DESC
+      LIMIT ?
+    `).all(limit) as RawRow[];
 
   const leads = rows.map((row) => {
     let scoreData: Record<string, unknown> = {};

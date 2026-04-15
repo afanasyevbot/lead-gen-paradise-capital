@@ -163,10 +163,13 @@ export default function PipelinePage() {
           .then((r) => r.json())
           .then(setSummary)
           .catch(() => {});
-        fetch(`/api/pipeline/scored-leads?since=${since}`)
-          .then((r) => r.json())
-          .then((d) => setScoredLeads(d.leads ?? []))
-          .catch(() => {});
+        const scoredCount = j.result?.scored ?? 0;
+        if (scoredCount > 0) {
+          fetch(`/api/pipeline/scored-leads?limit=${scoredCount}`)
+            .then((r) => r.json())
+            .then((d) => setScoredLeads(d.leads ?? []))
+            .catch(() => {});
+        }
       }
     }, 2000);
   }
