@@ -5,27 +5,35 @@
  * UI can warn the user when a stage is silently under-performing.
  *
  * Defensive: every query is wrapped so a missing table or bad DB state
- * degrades one field rather than 500'ing the whole endpoint.
+ * degrades one field rather than 500'ing the whole endpoint. Errors are
+ * collected and returned in `errors[]` so the UI can badge broken stages
+ * instead of silently rendering them as green/zero.
  */
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
 import type Database from "better-sqlite3";
 
-function safeCount(db: Database.Database, sql: string): number {
+type Errors = { field: string; error: string }[];
+
+function safeCount(db: Database.Database, field: string, sql: string, errors: Errors): number {
   try {
     const row = db.prepare(sql).get() as { c: number } | undefined;
     return row?.c ?? 0;
   } catch (e) {
-    console.warn(`[HEALTH] query failed: ${sql.slice(0, 60)}… ${String(e)}`);
+    const msg = String(e);
+    console.warn(`[HEALTH] ${field} query failed: ${msg}`);
+    errors.push({ field, error: msg });
     return 0;
   }
 }
 
-function safeAll<T>(db: Database.Database, sql: string): T[] {
+function safeAll<T>(db: Database.Database, field: string, sql: string, errors: Errors): T[] {
   try {
     return db.prepare(sql).all() as T[];
   } catch (e) {
-    console.warn(`[HEALTH] query failed: ${sql.slice(0, 60)}… ${String(e)}`);
+    const msg = String(e);
+    console.warn(`[HEALTH] ${field} query failed: ${msg}`);
+    errors.push({ field, error: msg });
     return [];
   }
 }
@@ -33,19 +41,20 @@ function safeAll<T>(db: Database.Database, sql: string): T[] {
 export async function GET() {
   try {
     const db = getDb();
+    const errors: Errors = [];
 
-    // Stage counts (each safely wrapped)
-    const scraped = safeCount(db, "SELECT COUNT(*) as c FROM scraped_content");
-    const enriched = safeCount(db, "SELECT COUNT(*) as c FROM enrichment_data");
-    const scored = safeCount(db, "SELECT COUNT(*) as c FROM scoring_data");
-    const outreach = safeCount(db, "SELECT COUNT(*) as c FROM outreach_data");
-    const linkedin = safeCount(db, "SELECT COUNT(*) as c FROM linkedin_data");
-    const emailsFound = safeCount(db, "SELECT COUNT(*) as c FROM founder_emails WHERE status = 'found'");
-    const emailsAttempted = safeCount(db, "SELECT COUNT(*) as c FROM founder_emails");
-    const totalLeads = safeCount(db, "SELECT COUNT(*) as c FROM leads");
+    const scraped = safeCount(db, "scraped", "SELECT COUNT(*) as c FROM scraped_content WHERE pages_scraped > 0", errors);
+    const enriched = safeCount(db, "enriched", "SELECT COUNT(*) as c FROM enrichment_data", errors);
+    const scored = safeCount(db, "scored", "SELECT COUNT(*) as c FROM scoring_data", errors);
+    const outreach = safeCount(db, "outreach", "SELECT COUNT(*) as c FROM outreach_data", errors);
+    const linkedin = safeCount(db, "linkedin", "SELECT COUNT(*) as c FROM linkedin_data", errors);
+    const emailsFound = safeCount(db, "emails_found", "SELECT COUNT(*) as c FROM founder_emails WHERE status = 'found'", errors);
+    const emailsAttempted = safeCount(db, "emails_attempted", "SELECT COUNT(*) as c FROM founder_emails", errors);
+    const totalLeads = safeCount(db, "total_leads", "SELECT COUNT(*) as c FROM leads", errors);
     const leadsWithWebsite = safeCount(
-      db,
-      "SELECT COUNT(*) as c FROM leads WHERE website IS NOT NULL AND website != ''"
+      db, "leads_with_website",
+      "SELECT COUNT(*) as c FROM leads WHERE website IS NOT NULL AND website != ''",
+      errors,
     );
 
     const stages = [
@@ -62,8 +71,9 @@ export async function GET() {
     }));
 
     const funnelStatuses = safeAll<{ enrichment_status: string; c: number }>(
-      db,
-      "SELECT enrichment_status, COUNT(*) as c FROM leads GROUP BY enrichment_status"
+      db, "funnel_statuses",
+      "SELECT enrichment_status, COUNT(*) as c FROM leads GROUP BY enrichment_status",
+      errors,
     );
     const byStatus: Record<string, number> = {};
     for (const r of funnelStatuses) byStatus[r.enrichment_status] = r.c;
@@ -81,30 +91,33 @@ export async function GET() {
     };
 
     const noisyNames = safeCount(
-      db,
+      db, "noisy_names",
       `SELECT COUNT(*) as c FROM leads
-       WHERE lower(business_name) IN ('linkedin','google','facebook','-','','n/a','unknown')`
+       WHERE lower(business_name) IN ('linkedin','google','facebook','-','','n/a','unknown')`,
+      errors,
     );
 
     const staleScrapeFailed = safeCount(
-      db,
+      db, "stale_scrape_failed",
       `SELECT COUNT(*) as c FROM leads
        WHERE enrichment_status = 'scrape_failed'
-       AND updated_at < datetime('now', '-7 days')`
+       AND updated_at < datetime('now', '-7 days')`,
+      errors,
     );
 
-    // json_extract may not be available on all SQLite builds — fall back to 0
     const unverifiedFounders = safeCount(
-      db,
+      db, "unverified_founders",
       `SELECT COUNT(*) as c FROM enrichment_data ed
        WHERE json_extract(ed.data, '$.is_likely_founder') = 1
          AND (json_extract(ed.data, '$.founder_evidence') IS NULL
-              OR length(json_extract(ed.data, '$.founder_evidence')) < 10)`
+              OR length(json_extract(ed.data, '$.founder_evidence')) < 10)`,
+      errors,
     );
 
     const lowConfHighScore = safeCount(
-      db,
-      "SELECT COUNT(*) as c FROM scoring_data WHERE confidence = 'low' AND score >= 6"
+      db, "low_conf_high_score",
+      "SELECT COUNT(*) as c FROM scoring_data WHERE confidence = 'low' AND score >= 6",
+      errors,
     );
 
     const attention = {
@@ -122,6 +135,7 @@ export async function GET() {
       funnel,
       attention,
       byStatus,
+      errors, // UI should warn when non-empty
     });
   } catch (e) {
     console.error("[HEALTH] fatal:", e);

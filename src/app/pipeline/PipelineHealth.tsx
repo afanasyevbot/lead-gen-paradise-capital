@@ -29,6 +29,7 @@ interface HealthResponse {
     email_miss_rate: number;
   };
   byStatus: Record<string, number>;
+  errors?: { field: string; error: string }[];
 }
 
 function pctLabel(n: number): string {
@@ -81,13 +82,35 @@ export default function PipelineHealth() {
   async function runAction(action: string, label: string) {
     setActionMsg(`Running ${label}…`);
     try {
+      // Admin secret is read from localStorage so prod deploys can gate access
+      // without exposing it in code. Falls back to empty string in dev.
+      const secret = typeof window !== "undefined"
+        ? window.localStorage.getItem("adminSecret") ?? ""
+        : "";
       const r = await fetch("/api/pipeline/admin", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(secret ? { "x-admin-secret": secret } : {}),
+        },
         body: JSON.stringify({ action }),
       });
+      if (r.status === 401) {
+        const entered = typeof window !== "undefined"
+          ? window.prompt("Admin secret:") : null;
+        if (entered) {
+          window.localStorage.setItem("adminSecret", entered);
+          setActionMsg(`${label}: secret saved, click again`);
+        } else {
+          setActionMsg(`${label}: unauthorized`);
+        }
+        return;
+      }
       const j = await r.json();
-      setActionMsg(`${label}: ${j.affected ?? 0} lead(s) affected`);
+      setActionMsg(
+        `${label}: ${j.affected ?? 0} lead(s) affected` +
+        (typeof j.emailsFound === "number" ? ` · ${j.emailsFound} emails harvested` : "")
+      );
       await load();
     } catch (e) {
       setActionMsg(`${label} failed: ${String(e)}`);
@@ -120,6 +143,17 @@ export default function PipelineHealth() {
           Refresh
         </button>
       </div>
+
+      {data.errors && data.errors.length > 0 && (
+        <div className="mb-3 p-2 text-xs rounded border border-amber-800 bg-amber-950/40 text-amber-200">
+          <div className="font-semibold">⚠ {data.errors.length} health query error(s) — figures may be inaccurate:</div>
+          <ul className="list-disc list-inside mt-1 font-mono text-[11px] break-all">
+            {data.errors.slice(0, 5).map((e, i) => (
+              <li key={i}><span className="font-bold">{e.field}:</span> {e.error}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       {/* Stage coverage */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-5">
