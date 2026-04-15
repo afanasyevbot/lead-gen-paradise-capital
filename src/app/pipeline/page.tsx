@@ -100,6 +100,8 @@ export default function PipelinePage() {
   const [mode, setMode] = useState<PipelineMode>("core");
   const [summary, setSummary] = useState<PipelineSummary | null>(null);
   const [scoredLeads, setScoredLeads] = useState<ScoredLead[]>([]);
+  const [scoredLeadsState, setScoredLeadsState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
+  const [scoredLeadsError, setScoredLeadsError] = useState<string | null>(null);
   const [expandedLead, setExpandedLead] = useState<number | null>(null);
   const [xrayReset, setXrayReset] = useState<number | null>(null);
   const [lockError, setLockError] = useState<string | null>(null);
@@ -124,6 +126,8 @@ export default function PipelinePage() {
     setJob(null);
     setSummary(null);
     setScoredLeads([]);
+    setScoredLeadsState("idle");
+    setScoredLeadsError(null);
     setExpandedLead(null);
 
     const res = await fetch(config.endpoint, {
@@ -164,12 +168,24 @@ export default function PipelinePage() {
           .then(setSummary)
           .catch(() => {});
         const scoredCount = j.result?.scored ?? 0;
-        if (scoredCount > 0) {
-          fetch(`/api/pipeline/scored-leads?limit=${scoredCount}`)
-            .then((r) => r.json())
-            .then((d) => setScoredLeads((d.leads ?? []).sort((a: ScoredLead, b: ScoredLead) => b.score - a.score)))
-            .catch(() => {});
-        }
+        // Always fetch — even if scored=0, we want to show the most recent
+        // scored leads (useful for enrich-only re-runs). Fallback to 20.
+        const fetchLimit = scoredCount > 0 ? scoredCount : 20;
+        setScoredLeadsState("loading");
+        fetch(`/api/pipeline/scored-leads?limit=${fetchLimit}`)
+          .then(async (r) => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text().catch(() => "")}`);
+            return r.json();
+          })
+          .then((d) => {
+            const leads = (d.leads ?? []) as ScoredLead[];
+            setScoredLeads([...leads].sort((a, b) => b.score - a.score));
+            setScoredLeadsState("loaded");
+          })
+          .catch((err) => {
+            setScoredLeadsError(err instanceof Error ? err.message : String(err));
+            setScoredLeadsState("error");
+          });
       }
     }, 2000);
   }
@@ -482,12 +498,23 @@ export default function PipelinePage() {
                 </div>
               )}
 
-              {/* Per-lead score summary */}
-              {scoredLeads.length > 0 && (
-                <div className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3">
-                  <p className="text-xs font-semibold text-[var(--muted)] mb-2 uppercase tracking-wide">
-                    Lead Scores ({scoredLeads.length})
+              {/* Per-lead score summary — always render after completion */}
+              <div className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3">
+                <p className="text-xs font-semibold text-[var(--muted)] mb-2 uppercase tracking-wide">
+                  Lead Scores ({scoredLeads.length}) {scoredLeadsState === "loading" && "— loading..."}
+                </p>
+                {scoredLeadsState === "loading" && scoredLeads.length === 0 && (
+                  <p className="text-xs text-[var(--muted)]">Fetching per-lead scores...</p>
+                )}
+                {scoredLeadsState === "error" && (
+                  <p className="text-xs text-red-400">Failed to load scores: {scoredLeadsError}</p>
+                )}
+                {scoredLeadsState === "loaded" && scoredLeads.length === 0 && (
+                  <p className="text-xs text-yellow-400">
+                    No scored leads returned from API. (scored={job.result?.scored ?? 0})
                   </p>
+                )}
+                {scoredLeads.length > 0 && (
                   <div className="space-y-1">
                     {scoredLeads.map((lead) => {
                       const isExpanded = expandedLead === lead.id;
@@ -567,8 +594,8 @@ export default function PipelinePage() {
                       );
                     })}
                   </div>
-                </div>
-              )}
+                )}
+              </div>
 
               {/* Cost summary for this run */}
               {summary?.cost && summary.cost.total_usd > 0 && (
