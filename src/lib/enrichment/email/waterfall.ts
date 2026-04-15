@@ -98,11 +98,23 @@ export class WaterfallEmailFinder {
     const providersHit: EmailProviderName[] = [];
     const seenEmails = new Set<string>();
 
+    // Hard per-provider timeout. Prevents a single slow/hanging provider
+    // (exhausted quota, rate-limit backoff, DNS failure) from eating 10–30s.
+    const PROVIDER_TIMEOUT_MS = 5000;
+    const withTimeout = <T>(p: Promise<T>, ms: number, label: string): Promise<T> =>
+      new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error(`${label} timeout ${ms}ms`)), ms);
+        p.then((v) => { clearTimeout(t); resolve(v); }, (e) => { clearTimeout(t); reject(e); });
+      });
+
     for (const provider of this.providers) {
       providersAttempted.push(provider.name);
 
       try {
-        const result = await provider.lookup(input);
+        // Website provider is local DB read — give it more headroom so the
+        // harvester's stored-content fallback can finish even on large text.
+        const timeout = provider.name === "website" ? 15000 : PROVIDER_TIMEOUT_MS;
+        const result = await withTimeout(provider.lookup(input), timeout, provider.name);
 
         if (result && !seenEmails.has(result.email.toLowerCase())) {
           seenEmails.add(result.email.toLowerCase());
@@ -131,6 +143,19 @@ export class WaterfallEmailFinder {
 
           // Stop on first verified-valid email
           if (verification?.status === "valid") {
+            break;
+          }
+
+          // Early-exit for a high-confidence own-domain personal email from the
+          // free website harvester. Verification for Google Workspace domains
+          // often returns "unknown" or "catch_all", which would otherwise drag
+          // us through every paid provider — expensive and slow when quotas
+          // are exhausted (each failing provider adds 3–5s of network latency).
+          if (
+            provider.name === "website" &&
+            result.confidence >= 0.8 &&
+            verification?.status !== "invalid"
+          ) {
             break;
           }
         }
