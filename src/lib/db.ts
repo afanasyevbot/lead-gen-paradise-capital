@@ -46,6 +46,28 @@ function createTables(db: Database.Database) {
     // use inline schema to ensure the app still works.
     db.exec(FALLBACK_SCHEMA);
   }
+  runMigrations(db);
+}
+
+/**
+ * Idempotent column migrations — SQLite has no "ADD COLUMN IF NOT EXISTS",
+ * so we check PRAGMA table_info before each ALTER.
+ */
+function runMigrations(db: Database.Database) {
+  const hasColumn = (table: string, col: string): boolean => {
+    try {
+      const rows = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+      return rows.some((r) => r.name === col);
+    } catch { return false; }
+  };
+  if (!hasColumn("scraped_content", "emails_found")) {
+    try { db.exec("ALTER TABLE scraped_content ADD COLUMN emails_found TEXT"); }
+    catch (e) { console.warn("[DB MIGRATE] add emails_found failed:", e); }
+  }
+  if (!hasColumn("scraped_content", "phones_found")) {
+    try { db.exec("ALTER TABLE scraped_content ADD COLUMN phones_found TEXT"); }
+    catch (e) { console.warn("[DB MIGRATE] add phones_found failed:", e); }
+  }
 }
 
 // Inline fallback — kept in sync with infrastructure/db/schema.sql
