@@ -218,7 +218,9 @@ export default function PipelinePage() {
         // scored leads (useful for enrich-only re-runs). Fallback to 20.
         const fetchLimit = scoredCount > 0 ? scoredCount : 20;
         setScoredLeadsState("loading");
-        fetch(`/api/pipeline/scored-leads?limit=${fetchLimit}`)
+        // Scope to this run's start time so we don't surface stale leads
+        // from earlier runs when the current run scored few/no leads.
+        fetch(`/api/pipeline/scored-leads?limit=${fetchLimit}&since=${since}`)
           .then(async (r) => {
             if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text().catch(() => "")}`);
             return r.json();
