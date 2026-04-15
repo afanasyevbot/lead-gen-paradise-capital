@@ -22,13 +22,60 @@ function randomViewport(): { width: number; height: number } {
   };
 }
 
-// Delay between separate search queries (called from route.ts)
-const INTER_QUERY_DELAY_MIN = 5000;
-const INTER_QUERY_DELAY_MAX = 12000;
+// Delay between separate search queries — longer = less detectable
+const INTER_QUERY_DELAY_MIN = 15_000;
+const INTER_QUERY_DELAY_MAX = 30_000;
 export async function interQueryDelay(): Promise<void> {
   const ms = randInt(INTER_QUERY_DELAY_MIN, INTER_QUERY_DELAY_MAX);
   console.log(`[GMAPS] Waiting ${(ms / 1000).toFixed(1)}s before next query...`);
   await new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Inject stealth overrides into every page to mask Playwright automation.
+ * Must be called after context.newPage() and before page.goto().
+ */
+async function injectStealthScripts(page: import("playwright").Page): Promise<void> {
+  await page.addInitScript(() => {
+    // Remove the webdriver flag — #1 bot signal
+    Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+
+    // Fake a realistic plugin list (headless has 0 plugins)
+    Object.defineProperty(navigator, "plugins", {
+      get: () => {
+        const arr = [
+          { name: "Chrome PDF Plugin", filename: "internal-pdf-viewer", description: "Portable Document Format" },
+          { name: "Chrome PDF Viewer", filename: "mhjfbmdgcfjbbpaeojofohoefgiehjai", description: "" },
+          { name: "Native Client", filename: "internal-nacl-plugin", description: "" },
+        ];
+        (arr as unknown as { length: number }).length = arr.length;
+        return arr;
+      },
+    });
+
+    // Fake languages
+    Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
+
+    // Fake hardware concurrency (headless often reports 1)
+    Object.defineProperty(navigator, "hardwareConcurrency", { get: () => 8 });
+
+    // Remove automation-related Chrome properties
+    // @ts-ignore
+    delete (window as unknown as Record<string, unknown>).cdc_adoQpoasnfa76pfcZLmcfl_Array;
+    // @ts-ignore
+    delete (window as unknown as Record<string, unknown>).cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+    // @ts-ignore
+    delete (window as unknown as Record<string, unknown>).cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+
+    // Spoof permissions API
+    const originalQuery = window.navigator.permissions?.query;
+    if (originalQuery) {
+      window.navigator.permissions.query = (parameters: PermissionDescriptor) =>
+        parameters.name === "notifications"
+          ? Promise.resolve({ state: Notification.permission } as PermissionStatus)
+          : originalQuery.call(window.navigator.permissions, parameters);
+    }
+  });
 }
 
 function makePlaceId(name: string, address: string): string {
@@ -108,6 +155,9 @@ export async function searchPlaces(
     });
     const page = await context.newPage();
 
+    // Inject stealth scripts BEFORE any navigation
+    await injectStealthScripts(page);
+
     // Block unnecessary resources to reduce bandwidth fingerprint
     await page.route("**/*.{png,jpg,jpeg,gif,svg,ico,woff,woff2}", (route) => route.abort());
 
@@ -174,7 +224,7 @@ export async function searchPlaces(
       console.log(`[GMAPS] Found ${earlyCount} initial results for "${query}" in "${location}"`);
     }
 
-    // Scroll to load more results
+    // Scroll to load more results — incremental human-like scrolling
     const feed = page.locator("[role='feed']").first();
     let prevCount = 0;
     let scrollAttempts = 0;
@@ -194,8 +244,19 @@ export async function searchPlaces(
         scrollAttempts = 0;
       }
       prevCount = currentCount;
-      await feed.evaluate((el) => (el.scrollTop = el.scrollHeight));
-      await randDelay(1500, 3500);
+
+      // Human-like incremental scroll instead of instant jump to bottom
+      await feed.evaluate((el) => {
+        const step = Math.floor(300 + Math.random() * 300); // 300-600px per tick
+        el.scrollTop += step;
+      });
+      await randDelay(800, 2000);
+
+      // Occasionally do a bigger scroll to seem more natural
+      if (Math.random() < 0.3) {
+        await feed.evaluate((el) => { el.scrollTop += Math.floor(500 + Math.random() * 400); });
+        await randDelay(500, 1200);
+      }
     }
 
     // Extract each listing
