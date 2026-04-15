@@ -3,6 +3,7 @@ import { getDb, setLeadStatus } from "@/lib/db";
 import { callAnthropicWithRetry, validateScoringResponse } from "./retry";
 import type { ProgressCallback } from "@/domain/types";
 import { loadPromptWithFallback } from "@/infrastructure/ai/prompt-loader";
+import { estimateAgeFromLinkedIn, formatAgeEstimateBlock } from "./age-estimator";
 
 const SYSTEM_PROMPT = `You are an exit-readiness analyst for Paradise Capital, Inc. — "No Regrets Business Exit Advisory Services." Your job is to score business owners on how well they match Paradise Capital's avatar and how receptive they would be to a warm, emotionally intelligent conversation about their next chapter.
 
@@ -150,6 +151,26 @@ export async function scoreLeads(
   const CONCURRENCY = 3;
   let processed = 0;
 
+  function buildLinkedInBlock(profileDataJson: string | null): string {
+    let exp: Array<{ title: string; company: string; duration: string }> = [];
+    let edu: Array<{ school: string; degree: string; years: string }> = [];
+    if (profileDataJson) {
+      try {
+        const pd = JSON.parse(profileDataJson);
+        if (Array.isArray(pd.experience)) exp = pd.experience;
+        if (Array.isArray(pd.education)) edu = pd.education;
+      } catch { /* ignore */ }
+    }
+    const expLines = exp.length > 0
+      ? `LinkedIn work history:\n${exp.slice(0, 5).map((e) => `  • ${e.title} at ${e.company}${e.duration ? ` — ${e.duration}` : ""}`).join("\n")}\n`
+      : "";
+    const eduLines = edu.length > 0
+      ? `LinkedIn education:\n${edu.slice(0, 3).map((e) => `  • ${e.school}${e.degree ? ` — ${e.degree}` : ""}${e.years ? ` (${e.years})` : ""}`).join("\n")}\n`
+      : "";
+    const ageBlock = formatAgeEstimateBlock(estimateAgeFromLinkedIn(exp, edu));
+    return expLines + eduLines + ageBlock;
+  }
+
   async function processRow(row: typeof rows[0]): Promise<void> {
     try {
       if (!row.enrichment_json) {
@@ -215,15 +236,7 @@ LinkedIn URL: ${row.linkedin_url || "Not found"}
 LinkedIn name: ${row.owner_name_from_linkedin || "Not found"}
 LinkedIn title: ${row.owner_title_from_linkedin || "Not found"}
 LinkedIn headline: ${row.linkedin_headline || "Not found"}
-${(() => {
-  let exp: Array<{ title: string; company: string; duration: string }> = [];
-  if (row.profile_data) {
-    try { const pd = JSON.parse(row.profile_data); if (Array.isArray(pd.experience)) exp = pd.experience; } catch { /* ignore */ }
-  }
-  if (exp.length === 0) return "";
-  const lines = exp.slice(0, 5).map((e) => `  • ${e.title} at ${e.company}${e.duration ? ` — ${e.duration}` : ""}`).join("\n");
-  return `LinkedIn work history (use start dates to estimate age):\n${lines}\n`;
-})()}
+${buildLinkedInBlock(row.profile_data)}
 
 FAITH SIGNALS: ${enrichment.faith_signals || "None found"}
 
