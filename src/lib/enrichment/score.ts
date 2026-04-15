@@ -281,7 +281,7 @@ CRITICAL REMINDERS:
       const hasScraped = !!db.prepare("SELECT 1 FROM scraped_content WHERE lead_id = ?").get(row.id);
       const hasLinkedIn = !!row.linkedin_url;
       const hasEmailFound = !!db.prepare(
-        "SELECT 1 FROM founder_emails WHERE lead_id = ? AND status = 'found'"
+        "SELECT 1 FROM founder_emails WHERE lead_id = ? AND email IS NOT NULL AND email != ''"
       ).get(row.id);
       const completeness = Number(!!row.website) + Number(hasScraped) + Number(hasLinkedIn) + Number(hasEmailFound);
       (result as Record<string, unknown>).data_completeness = completeness;
