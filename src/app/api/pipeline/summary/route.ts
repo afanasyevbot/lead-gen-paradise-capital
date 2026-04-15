@@ -9,7 +9,13 @@ import { ensureLeadCostsTable } from "@/lib/cost-tracker";
  */
 export async function GET(req: NextRequest) {
   const db = getDb();
-  const since = req.nextUrl.searchParams.get("since");
+  const sinceRaw = req.nextUrl.searchParams.get("since");
+  // SQLite stores datetime('now') as "YYYY-MM-DD HH:MM:SS" (space, no T, no Z).
+  // JS gives us ISO 8601 "YYYY-MM-DDTHH:MM:SS.mmmZ". Normalize to SQLite format
+  // so string comparisons work correctly.
+  const since = sinceRaw
+    ? sinceRaw.replace("T", " ").replace(/\.\d{3}Z$/, "").replace("Z", "")
+    : null;
 
   const stats = db.prepare(`
     SELECT
