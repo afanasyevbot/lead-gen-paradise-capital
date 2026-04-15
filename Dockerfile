@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y \
     libxdamage1 libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 \
     libcairo2 libasound2 libwayland-client0 \
     fonts-liberation fonts-noto-color-emoji \
-    ca-certificates wget \
+    ca-certificates wget curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
