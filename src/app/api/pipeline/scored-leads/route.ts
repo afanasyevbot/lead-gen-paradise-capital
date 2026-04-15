@@ -7,7 +7,11 @@ import { getDb } from "@/lib/db";
  */
 export async function GET(req: NextRequest) {
   const db = getDb();
-  const since = req.nextUrl.searchParams.get("since");
+  const sinceRaw = req.nextUrl.searchParams.get("since");
+  // Normalize ISO 8601 → SQLite datetime format so string comparisons work
+  const since = sinceRaw
+    ? sinceRaw.replace("T", " ").replace(/\.\d{3}Z$/, "").replace("Z", "")
+    : null;
 
   const query = since
     ? `
