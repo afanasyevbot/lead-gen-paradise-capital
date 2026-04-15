@@ -48,7 +48,7 @@ export async function GET() {
     const scored = safeCount(db, "scored", "SELECT COUNT(*) as c FROM scoring_data", errors);
     const outreach = safeCount(db, "outreach", "SELECT COUNT(*) as c FROM outreach_data", errors);
     const linkedin = safeCount(db, "linkedin", "SELECT COUNT(*) as c FROM linkedin_data", errors);
-    const emailsFound = safeCount(db, "emails_found", "SELECT COUNT(*) as c FROM founder_emails WHERE status = 'found'", errors);
+    const emailsFound = safeCount(db, "emails_found", "SELECT COUNT(*) as c FROM founder_emails WHERE email IS NOT NULL AND email != ''", errors);
     const emailsAttempted = safeCount(db, "emails_attempted", "SELECT COUNT(*) as c FROM founder_emails", errors);
     const totalLeads = safeCount(db, "total_leads", "SELECT COUNT(*) as c FROM leads", errors);
     const leadsWithWebsite = safeCount(
