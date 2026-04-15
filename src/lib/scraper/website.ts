@@ -374,11 +374,12 @@ export async function scrapeLeadsWebsites(
   // Search Google for their company website and update the lead record.
   const xrayNoWebsite = db
     .prepare(
-      `SELECT id, business_name FROM leads WHERE enrichment_status = 'pending'
+      `SELECT id, business_name, city, state, raw_data FROM leads
+       WHERE enrichment_status = 'pending'
        AND source = 'linkedin_xray'
        AND (website IS NULL OR website = '') LIMIT ?`
     )
-    .all(limit) as { id: number; business_name: string }[];
+    .all(limit) as { id: number; business_name: string; city: string | null; state: string | null; raw_data: string | null }[];
 
   let xrayWebsitesFound = 0;
   let xrayNoWebsiteFound = 0;
@@ -394,9 +395,22 @@ export async function scrapeLeadsWebsites(
       const xray = xrayNoWebsite[i];
       onProgress?.(i + 1, xrayNoWebsite.length, `Finding website: ${xray.business_name}`);
 
+      // Parse raw_data for owner name/title stored at X-Ray ingest time
+      let rawData: Record<string, unknown> = {};
+      try { rawData = JSON.parse(xray.raw_data ?? "{}"); } catch { /* ignore */ }
+
+      const xrayCtx: XRayLeadContext = {
+        businessName: xray.business_name,
+        ownerName: rawData.owner_name as string | null,
+        ownerTitle: rawData.owner_title as string | null,
+        city: xray.city,
+        state: xray.state,
+      };
+
       let website: string | null = null;
       try {
-        website = await withTimeout(discoverWebsite(xray.business_name, page), 20000, `discover:${xray.business_name}`);
+        // Up to 4 queries × ~20s each — allow 90s total
+        website = await withTimeout(discoverWebsite(xrayCtx, page), 90000, `discover:${xray.business_name}`);
       } catch { /* timeout or error — treat as not found */ }
       if (website) {
         db.prepare("UPDATE leads SET website = ?, no_website_flag = 0, updated_at = datetime('now') WHERE id = ?")
