@@ -1,5 +1,6 @@
 import { getDb, setLeadStatus } from "@/lib/db";
 import { acquireBrowser, releaseBrowser, randomUserAgent } from "@/infrastructure/scraper/browser-pool";
+import { harvestContactsFromPage } from "@/lib/scraper/email-harvester";
 import type { ProgressCallback } from "@/domain/types";
 import type { Page } from "playwright";
 
@@ -56,6 +57,8 @@ interface ScrapeResult {
   homepage_text: string;
   about_text: string;
   all_text: string;
+  emails_found: string[]; // harvested from mailto:, Cloudflare, HTML, deobfuscated text
+  phones_found: string[];
   error: string | null;
   terminalError?: boolean; // true = domain is dead, mark no_website not scrape_failed
 }
@@ -72,6 +75,8 @@ async function scrapeWebsite(url: string, timeoutMs = 22000): Promise<ScrapeResu
     homepage_text: "",
     about_text: "",
     all_text: "",
+    emails_found: [],
+    phones_found: [],
     error: null,
   };
 
@@ -163,6 +168,11 @@ async function scrapeWebsite(url: string, timeoutMs = 22000): Promise<ScrapeResu
     result.homepage_text = homepageText;
     result.pages_scraped = 1;
 
+    // Harvest contact info from homepage HTML (mailto, Cloudflare, obfuscated)
+    const homeHarvest = await harvestContactsFromPage(page).catch(() => ({ emails: [], phones: [] }));
+    const allEmails = new Set<string>(homeHarvest.emails);
+    const allPhones = new Set<string>(homeHarvest.phones);
+
     const allTexts = [`=== HOMEPAGE (${url}) ===\n${homepageText}`];
     let totalLen = homepageText.length;
 
@@ -183,12 +193,19 @@ async function scrapeWebsite(url: string, timeoutMs = 22000): Promise<ScrapeResu
           totalLen += text.length;
           result.pages_scraped++;
         }
+        // Harvest contacts from this sub-page too — contact pages are where
+        // mailto: hrefs and Cloudflare-protected emails usually live.
+        const subHarvest = await harvestContactsFromPage(page).catch(() => ({ emails: [], phones: [] }));
+        for (const e of subHarvest.emails) allEmails.add(e);
+        for (const p of subHarvest.phones) allPhones.add(p);
       } catch { /* skip */ }
     }
 
     result.about_text = aboutTexts.join("\n\n");
     result.all_text = allTexts.join("\n\n").slice(0, MAX_TOTAL_TEXT);
     result.total_text_length = result.all_text.length;
+    result.emails_found = [...allEmails];
+    result.phones_found = [...allPhones];
   } catch (e) {
     result.error = String(e);
   } finally {
@@ -509,9 +526,13 @@ export async function scrapeLeadsWebsites(
     } else {
       counts.scraped++;
       db.prepare(
-        `INSERT OR REPLACE INTO scraped_content (lead_id, homepage_text, about_text, all_text, pages_scraped, scraped_at)
-         VALUES (?, ?, ?, ?, ?, datetime('now'))`
-      ).run(lead.id, result.homepage_text, result.about_text, result.all_text, result.pages_scraped);
+        `INSERT OR REPLACE INTO scraped_content
+           (lead_id, homepage_text, about_text, all_text, pages_scraped, emails_found, phones_found, scraped_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+      ).run(
+        lead.id, result.homepage_text, result.about_text, result.all_text, result.pages_scraped,
+        JSON.stringify(result.emails_found ?? []), JSON.stringify(result.phones_found ?? []),
+      );
       setLeadStatus(lead.id, "scraped");
     }
   }
@@ -560,9 +581,13 @@ export async function scrapeLeadWebsiteById(
   }
 
   db.prepare(
-    `INSERT OR REPLACE INTO scraped_content (lead_id, homepage_text, about_text, all_text, pages_scraped, scraped_at)
-     VALUES (?, ?, ?, ?, ?, datetime('now'))`
-  ).run(lead.id, result.homepage_text, result.about_text, result.all_text, result.pages_scraped);
+    `INSERT OR REPLACE INTO scraped_content
+       (lead_id, homepage_text, about_text, all_text, pages_scraped, emails_found, phones_found, scraped_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+  ).run(
+    lead.id, result.homepage_text, result.about_text, result.all_text, result.pages_scraped,
+    JSON.stringify(result.emails_found ?? []), JSON.stringify(result.phones_found ?? []),
+  );
 
   // Advance status to 'scraped' (handles any current status gracefully)
   try {

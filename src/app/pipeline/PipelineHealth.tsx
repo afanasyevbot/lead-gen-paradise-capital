@@ -193,6 +193,10 @@ export default function PipelineHealth() {
             className="text-xs px-3 py-1.5 rounded border border-[var(--border)] hover:border-[var(--accent)] bg-[var(--card)]">
             Retry stale scrape_failed
           </button>
+          <button onClick={() => runAction("rescan_emails", "Rescan scraped content for emails")}
+            className="text-xs px-3 py-1.5 rounded border border-[var(--border)] hover:border-[var(--accent)] bg-[var(--card)]">
+            Rescan emails
+          </button>
           <button onClick={() => runAction("delete_noisy", "Delete noisy leads")}
             className="text-xs px-3 py-1.5 rounded border border-red-800 hover:border-red-500 bg-[var(--card)] text-red-300">
             Delete noisy leads

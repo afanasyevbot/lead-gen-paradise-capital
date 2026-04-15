@@ -10,6 +10,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
+import { harvestContactsFromStored } from "@/lib/scraper/email-harvester";
 
 export async function POST(req: NextRequest) {
   const { action } = (await req.json().catch(() => ({}))) as { action?: string };
@@ -68,6 +69,43 @@ export async function POST(req: NextRequest) {
     });
     tx();
     return NextResponse.json({ ok: true, action, affected: ids.length });
+  }
+
+  if (action === "rescan_emails") {
+    // Re-run the harvester over already-scraped content so existing leads
+    // get emails_found populated without re-invoking Playwright.
+    const rows = db.prepare(`
+      SELECT sc.lead_id, sc.homepage_text, sc.about_text, sc.all_text
+      FROM scraped_content sc
+      WHERE (sc.emails_found IS NULL OR sc.emails_found = '[]' OR sc.emails_found = '')
+        AND (sc.homepage_text IS NOT NULL OR sc.all_text IS NOT NULL)
+    `).all() as {
+      lead_id: number;
+      homepage_text: string | null;
+      about_text: string | null;
+      all_text: string | null;
+    }[];
+
+    const upd = db.prepare(
+      "UPDATE scraped_content SET emails_found = ?, phones_found = COALESCE(phones_found, '[]') WHERE lead_id = ?"
+    );
+
+    let updated = 0;
+    let emailsFound = 0;
+    const tx = db.transaction(() => {
+      for (const r of rows) {
+        const text = [r.homepage_text, r.about_text, r.all_text].filter(Boolean).join("\n");
+        if (!text) continue;
+        const { emails } = harvestContactsFromStored("", text);
+        if (emails.length > 0) {
+          upd.run(JSON.stringify(emails), r.lead_id);
+          updated++;
+          emailsFound += emails.length;
+        }
+      }
+    });
+    tx();
+    return NextResponse.json({ ok: true, action, affected: updated, emailsFound, scanned: rows.length });
   }
 
   return NextResponse.json({ error: "unknown action" }, { status: 400 });
