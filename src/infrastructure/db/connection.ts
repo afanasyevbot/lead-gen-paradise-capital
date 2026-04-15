@@ -14,7 +14,7 @@ import { readFileSync } from "fs";
 
 const DB_PATH =
   process.env.DATABASE_PATH ||
-  path.resolve(process.cwd(), "../paradise_leads.db");
+  path.resolve(process.cwd(), "paradise_leads.db");
 
 let _db: Database.Database | null = null;
 
