@@ -3,6 +3,7 @@ import { callAnthropicWithRetry } from "./retry";
 import { createAnthropicClient } from "./client";
 import type { ProgressCallback } from "@/domain/types";
 import { loadPromptWithFallback } from "@/infrastructure/ai/prompt-loader";
+import { estimateAgeFromLinkedIn, formatAgeEstimateBlock } from "./age-estimator";
 
 const SYSTEM_PROMPT = `You are a data extraction agent for Paradise Capital, an M&A advisory firm that helps founders exit their businesses with "No Regrets." Your #1 goal is to identify FOUNDER-OWNED businesses where the ORIGINAL FOUNDER is ideally in their 60s and approaching exit.
 
@@ -133,18 +134,31 @@ export async function enrichLeads(
 
           // Parse LinkedIn profile_data (set by stage 16 profile visit) for experience/tenure
           let linkedInExperience: Array<{ title: string; company: string; duration: string }> = [];
+          let linkedInEducation: Array<{ school: string; degree: string; years: string }> = [];
           if (row.profile_data) {
             try {
               const pd = JSON.parse(row.profile_data);
               if (Array.isArray(pd.experience)) linkedInExperience = pd.experience;
+              if (Array.isArray(pd.education)) linkedInEducation = pd.education;
             } catch { /* ignore */ }
           }
+
+          // Deterministic age calculation — done in code, not left to Claude
+          const ageEstimate = estimateAgeFromLinkedIn(linkedInExperience, linkedInEducation);
 
           const experienceBlock = linkedInExperience.length > 0
             ? linkedInExperience.slice(0, 5).map((e) =>
                 `  • ${e.title} at ${e.company}${e.duration ? ` — ${e.duration}` : ""}`
               ).join("\n")
             : null;
+
+          const educationBlock = linkedInEducation.length > 0
+            ? linkedInEducation.slice(0, 3).map((e) =>
+                `  • ${e.school}${e.degree ? ` — ${e.degree}` : ""}${e.years ? ` (${e.years})` : ""}`
+              ).join("\n")
+            : null;
+
+          const ageBlock = formatAgeEstimateBlock(ageEstimate);
 
           return `Extract business and ownership data from ${isLinkedInOnly ? "LinkedIn profile data" : "this website text and LinkedIn data"}.
 
@@ -156,7 +170,7 @@ Source: ${row.source}
 LinkedIn URL: ${row.linkedin_url || "Not found"}
 Owner name (from LinkedIn): ${row.owner_name_from_linkedin || "Not found"}
 Owner title (from LinkedIn): ${row.owner_title_from_linkedin || "Not found"}
-LinkedIn headline: ${row.linkedin_headline || "Not found"}${experienceBlock ? `\nLinkedIn work history:\n${experienceBlock}\n\nIMPORTANT: Use work history start dates to estimate owner age. Example: "Owner at Carlson Printing Company · Sep 1996 - Present · 29 yrs 8 mos" means they started this role in 1996. If they were 25-35 when they founded the business, they are now ~55-65. Use this to set estimated_owner_age_range.` : ""}
+LinkedIn headline: ${row.linkedin_headline || "Not found"}${experienceBlock ? `\nLinkedIn work history:\n${experienceBlock}` : ""}${educationBlock ? `\nLinkedIn education:\n${educationBlock}` : ""}${ageBlock}
 --- END LINKEDIN ---
 
 NOTE: LinkedIn title is a STRONG signal for founder detection. "Founder," "Owner/Founder," "President & Founder" = confirmed founder. "General Manager," "VP," "Director" = likely hired. Use the headline for career tenure clues (e.g. "30+ years in marine services").
