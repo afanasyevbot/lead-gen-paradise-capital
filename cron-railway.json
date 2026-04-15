@@ -1,6 +1,6 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
   "deploy": {
-    "startCommand": "curl -sSf -X POST -H \"Authorization: Bearer $REPORT_TOKEN\" https://pure-art-production-a5e0.up.railway.app/api/admin/weekly-report"
+    "startCommand": "sh /app/scripts/cron-weekly.sh"
   }
 }
