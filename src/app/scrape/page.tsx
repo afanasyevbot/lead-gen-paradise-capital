@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { US_STATES, formatCityState } from "@/lib/locations";
 
 interface PresetData {
   queries: string[];
@@ -24,6 +25,28 @@ export default function ScrapePage() {
   const [autoPipeline, setAutoPipeline] = useState(false);
   const [pipelineTriggered, setPipelineTriggered] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // State picker for the top-cities quick-append helper
+  const [pickerState, setPickerState] = useState("FL");
+
+  function appendTopCities(n: number) {
+    const state = US_STATES.find((s) => s.code === pickerState);
+    if (!state) return;
+    const toAdd = state.cities
+      .slice(0, n)
+      .map((c) => formatCityState(c, state.code));
+    // Merge with existing, dedupe, preserve order
+    const existing = locations.split("\n").map((l) => l.trim()).filter(Boolean);
+    const seen = new Set(existing.map((l) => l.toLowerCase()));
+    const merged = [...existing];
+    for (const line of toAdd) {
+      if (!seen.has(line.toLowerCase())) {
+        merged.push(line);
+        seen.add(line.toLowerCase());
+      }
+    }
+    setLocations(merged.join("\n"));
+  }
 
   // Preset editor state
   const [showEditor, setShowEditor] = useState(false);
@@ -221,6 +244,39 @@ export default function ScrapePage() {
         {/* Locations */}
         <div>
           <label className="block text-sm text-[var(--muted)] mb-1">Locations (one per line)</label>
+          {/* State quick-append picker */}
+          <div className="flex items-center gap-2 mb-2 text-xs">
+            <span className="text-[var(--muted)]">Quick add:</span>
+            <select
+              value={pickerState}
+              onChange={(e) => setPickerState(e.target.value)}
+              className="px-2 py-1 bg-[var(--bg)] border border-[var(--border)] rounded text-xs"
+              disabled={running}
+            >
+              {US_STATES.map((s) => (
+                <option key={s.code} value={s.code}>{s.name}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => appendTopCities(5)}
+              disabled={running}
+              className="px-2 py-1 bg-[var(--border)] rounded hover:bg-[#444]"
+              title="Append top 5 cities for this state"
+            >
+              Top 5
+            </button>
+            <button
+              type="button"
+              onClick={() => appendTopCities(10)}
+              disabled={running}
+              className="px-2 py-1 bg-[var(--border)] rounded hover:bg-[#444]"
+              title="Append top 10 cities for this state"
+            >
+              Top 10
+            </button>
+            <span className="text-[var(--muted)]">— or type any location below</span>
+          </div>
           <textarea
             value={locations}
             onChange={(e) => setLocations(e.target.value)}

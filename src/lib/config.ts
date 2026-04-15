@@ -177,6 +177,105 @@ export const SEARCH_PRESETS: Record<string, string[]> = {
     "janitorial supply distributor", "office supply distributor",
     "uniform company", "workwear company",
   ],
+
+  // ── Consumer Services ────────────────────────────────────────────────
+  "laundry": [
+    "dry cleaner", "laundromat", "commercial laundry",
+    "uniform laundry", "linen service company",
+  ],
+  "self-storage": [
+    "self storage facility", "storage units", "mini storage",
+    "climate controlled storage", "boat and rv storage",
+  ],
+  "car-wash": [
+    "car wash", "auto detailing company", "mobile car wash",
+    "express car wash", "full service car wash",
+  ],
+  "fitness": [
+    "gym", "fitness center", "personal training studio",
+    "yoga studio", "pilates studio", "crossfit box",
+  ],
+  "wellness-spa": [
+    "day spa", "med spa", "medical spa",
+    "salon suite", "massage therapy business", "wellness center",
+  ],
+  "pet-services": [
+    "dog grooming", "dog daycare", "pet boarding",
+    "dog training company", "mobile pet grooming",
+  ],
+
+  // ── B2B Services ─────────────────────────────────────────────────────
+  "translation": [
+    "translation services", "interpretation services",
+    "localization company", "language services company",
+  ],
+  "security-services": [
+    "security guard services", "private security company",
+    "event security company", "armored car services",
+  ],
+  "appraisal": [
+    "commercial appraisal firm", "business valuation firm",
+    "real estate appraiser", "equipment appraisal company",
+  ],
+  "testing-inspection": [
+    "testing laboratory", "inspection services",
+    "NDT testing company", "materials testing lab",
+    "environmental testing lab", "calibration laboratory",
+  ],
+  "commercial-cleaning": [
+    "commercial cleaning company", "office cleaning services",
+    "post-construction cleaning", "window cleaning company",
+    "floor cleaning services",
+  ],
+
+  // ── Niche Manufacturing ──────────────────────────────────────────────
+  "aerospace-parts": [
+    "aerospace manufacturer", "aerospace parts supplier",
+    "precision aerospace machining", "aerospace components",
+  ],
+  "medical-devices": [
+    "medical device manufacturer", "medical equipment manufacturer",
+    "surgical instrument manufacturer", "medical parts manufacturer",
+  ],
+  "defense-suppliers": [
+    "defense contractor", "defense manufacturer",
+    "DOD supplier", "defense electronics manufacturer",
+    "military parts supplier",
+  ],
+  "specialty-chemicals": [
+    "specialty chemicals manufacturer", "industrial coatings manufacturer",
+    "adhesives manufacturer", "lubricants manufacturer",
+    "chemical blending company",
+  ],
+  "tooling-dies": [
+    "tool and die shop", "die maker",
+    "mold maker", "precision tooling company",
+    "injection mold maker",
+  ],
+
+  // ── Tech / SaaS-Adjacent ─────────────────────────────────────────────
+  "managed-hosting": [
+    "managed hosting company", "web hosting company",
+    "colocation provider", "cloud services provider",
+  ],
+  "data-centers": [
+    "data center operator", "colocation facility",
+    "edge data center", "regional data center",
+  ],
+  "cybersecurity": [
+    "cybersecurity firm", "managed security services provider",
+    "penetration testing firm", "security consulting firm",
+    "MSSP company",
+  ],
+  "dev-shops": [
+    "custom software development company", "software agency",
+    "app development firm", "software consultancy",
+    "web development agency",
+  ],
+  "av-integrators": [
+    "audio visual integrator", "AV installation company",
+    "commercial AV company", "conference room AV company",
+  ],
 };
 
 // Structural chain/franchise hints — words that almost never appear in
