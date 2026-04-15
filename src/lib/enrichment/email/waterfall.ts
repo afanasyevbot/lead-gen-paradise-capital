@@ -108,15 +108,20 @@ export class WaterfallEmailFinder {
           seenEmails.add(result.email.toLowerCase());
           providersHit.push(provider.name);
 
-          // Verify the email
-          const verification = await verifyEmail(result.email);
+          // Verify the email — guard against null/undefined from failed verification
+          let verification: Awaited<ReturnType<typeof verifyEmail>> | null = null;
+          try {
+            verification = await verifyEmail(result.email);
+          } catch (verifyErr) {
+            console.warn(`[EmailWaterfall] verification failed for ${result.email}:`, verifyErr);
+          }
 
           const candidate: EmailCandidate = {
             email: result.email,
             provider: provider.name,
             confidenceScore: result.confidence,
-            verificationStatus: verification.status,
-            verificationMethod: verification.method,
+            verificationStatus: verification?.status ?? "unverified",
+            verificationMethod: verification?.method ?? "none",
             ownerName: result.ownerName,
             ownerTitle: result.ownerTitle,
             rawResponse: result.rawResponse,
@@ -125,7 +130,7 @@ export class WaterfallEmailFinder {
           candidates.push(candidate);
 
           // Stop on first verified-valid email
-          if (verification.status === "valid") {
+          if (verification?.status === "valid") {
             break;
           }
         }

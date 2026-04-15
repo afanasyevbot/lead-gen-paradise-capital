@@ -150,7 +150,27 @@ export async function scoreLeads(
 
   async function processRow(row: typeof rows[0]): Promise<void> {
     try {
-      const enrichment = JSON.parse(row.enrichment_json);
+      if (!row.enrichment_json) {
+        console.warn(`[SCORE SKIP] ${row.business_name} (id=${row.id}): enrichment_json is null/empty — marking score_failed`);
+        setLeadStatus(row.id, "score_failed");
+        counts.failed++;
+        return;
+      }
+      let enrichment: Record<string, unknown>;
+      try {
+        enrichment = JSON.parse(row.enrichment_json);
+      } catch (parseErr) {
+        console.error(`[SCORE FAIL] ${row.business_name} (id=${row.id}): malformed enrichment JSON — ${String(parseErr)}`);
+        setLeadStatus(row.id, "score_failed");
+        counts.failed++;
+        return;
+      }
+      if (!enrichment || typeof enrichment !== "object") {
+        console.warn(`[SCORE SKIP] ${row.business_name} (id=${row.id}): enrichment parsed to non-object — marking score_failed`);
+        setLeadStatus(row.id, "score_failed");
+        counts.failed++;
+        return;
+      }
       const result = await callAnthropicWithRetry<{
         score: number;
         confidence: string;

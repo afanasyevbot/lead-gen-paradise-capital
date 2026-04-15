@@ -19,6 +19,25 @@ interface PipelineSummary {
   cost: { total_usd: number; by_stage: Record<string, number>; leads_billed: number };
 }
 
+interface ScoredLead {
+  id: number;
+  business_name: string;
+  website: string | null;
+  city: string | null;
+  state: string | null;
+  score: number;
+  confidence: string;
+  recommended_action: string;
+  avatar_fit?: string;
+  reasoning?: string;
+  primary_signals?: string[];
+  risk_factors?: string[];
+  owner_name?: string;
+  estimated_owner_age?: string;
+  estimated_revenue_range?: string;
+  is_likely_founder?: boolean;
+}
+
 const CORE_STAGES = [
   { key: "scrape-websites", label: "Websites", desc: "Scrape lead websites" },
   { key: "linkedin", label: "LinkedIn", desc: "Find owner profiles" },
@@ -80,6 +99,8 @@ export default function PipelinePage() {
   const [minScore, setMinScore] = useState(5);
   const [mode, setMode] = useState<PipelineMode>("core");
   const [summary, setSummary] = useState<PipelineSummary | null>(null);
+  const [scoredLeads, setScoredLeads] = useState<ScoredLead[]>([]);
+  const [expandedLead, setExpandedLead] = useState<number | null>(null);
   const [xrayReset, setXrayReset] = useState<number | null>(null);
   const [lockError, setLockError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -102,6 +123,8 @@ export default function PipelinePage() {
     setRunning(true);
     setJob(null);
     setSummary(null);
+    setScoredLeads([]);
+    setExpandedLead(null);
 
     const res = await fetch(config.endpoint, {
       method: "POST",
@@ -135,9 +158,14 @@ export default function PipelinePage() {
         if (pollRef.current) clearInterval(pollRef.current);
         setRunning(false);
         // Fetch meaningful summary after completion — pass job start time for cost scoping
-        fetch(`/api/pipeline/summary?since=${encodeURIComponent(j.startedAt ?? "")}`)
+        const since = encodeURIComponent(j.startedAt ?? "");
+        fetch(`/api/pipeline/summary?since=${since}`)
           .then((r) => r.json())
           .then(setSummary)
+          .catch(() => {});
+        fetch(`/api/pipeline/scored-leads?since=${since}`)
+          .then((r) => r.json())
+          .then((d) => setScoredLeads(d.leads ?? []))
           .catch(() => {});
       }
     }, 2000);
@@ -447,6 +475,94 @@ export default function PipelinePage() {
                         <strong>{summary.this_run_scores.filtered_out}</strong>
                       </div>
                     )}
+                  </div>
+                </div>
+              )}
+
+              {/* Per-lead score summary */}
+              {scoredLeads.length > 0 && (
+                <div className="bg-[var(--bg)] border border-[var(--border)] rounded-lg p-3">
+                  <p className="text-xs font-semibold text-[var(--muted)] mb-2 uppercase tracking-wide">
+                    Lead Scores ({scoredLeads.length})
+                  </p>
+                  <div className="space-y-1">
+                    {scoredLeads.map((lead) => {
+                      const isExpanded = expandedLead === lead.id;
+                      const scoreColor =
+                        lead.score >= 8 ? "text-green-400" :
+                        lead.score === 7 ? "text-green-300" :
+                        lead.score >= 5 ? "text-yellow-400" :
+                        "text-[var(--muted)]";
+                      const actionLabel: Record<string, string> = {
+                        reach_out_now: "Reach out now",
+                        reach_out_warm: "Reach out warm",
+                        offer_booklet: "Offer booklet",
+                        monitor: "Monitor",
+                        skip: "Skip",
+                      };
+                      return (
+                        <div key={lead.id} className="border border-[var(--border)] rounded-lg overflow-hidden">
+                          <button
+                            onClick={() => setExpandedLead(isExpanded ? null : lead.id)}
+                            className="w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-white/5 transition-colors"
+                          >
+                            <span className={`text-lg font-bold tabular-nums w-6 shrink-0 ${scoreColor}`}>
+                              {lead.score}
+                            </span>
+                            <span className="flex-1 text-sm font-medium truncate">{lead.business_name}</span>
+                            {lead.city && (
+                              <span className="text-xs text-[var(--muted)] shrink-0">{lead.city}{lead.state ? `, ${lead.state}` : ""}</span>
+                            )}
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded shrink-0 ${
+                              lead.confidence === "high" ? "bg-green-900/50 text-green-400" :
+                              lead.confidence === "medium" ? "bg-yellow-900/50 text-yellow-400" :
+                              "bg-[var(--border)] text-[var(--muted)]"
+                            }`}>
+                              {lead.confidence}
+                            </span>
+                            <span className="text-[var(--muted)] text-xs shrink-0">{isExpanded ? "▲" : "▼"}</span>
+                          </button>
+                          {isExpanded && (
+                            <div className="px-3 pb-3 pt-1 border-t border-[var(--border)] space-y-2 text-xs">
+                              <div className="flex flex-wrap gap-x-4 gap-y-1 text-[var(--muted)]">
+                                {lead.owner_name && <span><strong className="text-[var(--fg)]">Owner:</strong> {lead.owner_name}</span>}
+                                {lead.estimated_owner_age && <span><strong className="text-[var(--fg)]">Age:</strong> {lead.estimated_owner_age}</span>}
+                                {lead.estimated_revenue_range && <span><strong className="text-[var(--fg)]">Revenue:</strong> {lead.estimated_revenue_range}</span>}
+                                {lead.is_likely_founder !== undefined && (
+                                  <span><strong className="text-[var(--fg)]">Founder:</strong> {lead.is_likely_founder ? "Yes" : "No"}</span>
+                                )}
+                                <span><strong className="text-[var(--fg)]">Action:</strong> {actionLabel[lead.recommended_action] ?? lead.recommended_action}</span>
+                                {lead.avatar_fit && <span><strong className="text-[var(--fg)]">Fit:</strong> {lead.avatar_fit}</span>}
+                              </div>
+                              {lead.primary_signals && lead.primary_signals.length > 0 && (
+                                <div>
+                                  <p className="text-green-400 font-medium mb-0.5">Signals</p>
+                                  <ul className="space-y-0.5 text-[var(--muted)]">
+                                    {lead.primary_signals.map((s, i) => <li key={i}>+ {s}</li>)}
+                                  </ul>
+                                </div>
+                              )}
+                              {lead.risk_factors && lead.risk_factors.length > 0 && (
+                                <div>
+                                  <p className="text-yellow-400 font-medium mb-0.5">Risk factors</p>
+                                  <ul className="space-y-0.5 text-[var(--muted)]">
+                                    {lead.risk_factors.map((r, i) => <li key={i}>− {r}</li>)}
+                                  </ul>
+                                </div>
+                              )}
+                              {lead.reasoning && (
+                                <p className="text-[var(--muted)] italic">{lead.reasoning}</p>
+                              )}
+                              {lead.website && (
+                                <a href={lead.website} target="_blank" rel="noopener noreferrer" className="text-[var(--accent)] hover:underline block">
+                                  {lead.website}
+                                </a>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}

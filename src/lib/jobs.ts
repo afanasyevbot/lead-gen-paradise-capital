@@ -86,7 +86,9 @@ export function completeJob(id: string, result: Record<string, number>) {
          WHERE id = ?`
       )
       .run(JSON.stringify(result), id);
-  } catch { /* best-effort */ }
+  } catch (err) {
+    console.error(`[JOBS] completeJob failed for ${id}:`, String(err));
+  }
 }
 
 export function failJob(id: string, error: string) {
@@ -98,7 +100,9 @@ export function failJob(id: string, error: string) {
          WHERE id = ?`
       )
       .run(error, id);
-  } catch { /* best-effort */ }
+  } catch (err) {
+    console.error(`[JOBS] failJob failed for ${id}:`, String(err));
+  }
 }
 
 export function getJob(id: string): Job | undefined {

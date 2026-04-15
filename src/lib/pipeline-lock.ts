@@ -80,7 +80,7 @@ export function isLocked(): boolean {
   }
 }
 
-const STALE_LOCK_MINUTES = 30; // any pipeline running >30min is assumed crashed
+const STALE_LOCK_MINUTES = 120; // any pipeline running >2 hours is assumed crashed
 
 export function getLockStatus(): {
   locked: boolean;
