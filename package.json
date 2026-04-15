@@ -8,7 +8,9 @@
     "build": "next build",
     "start": "next start",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "dedup:dry": "tsx scripts/dedup-backfill.ts",
+    "dedup:apply": "tsx scripts/dedup-backfill.ts --apply"
   },
   "keywords": [],
   "author": "",
