@@ -60,7 +60,7 @@ export function trackClaudeCost(
 ): void {
   try {
     ensureLeadCostsTable();
-    const pricing = MODEL_PRICING[model] ?? MODEL_PRICING["claude-sonnet-4-20250514"];
+    const pricing = MODEL_PRICING[model] ?? MODEL_PRICING["claude-haiku-4-5"];
     const costUsd = inputTokens * pricing.input + outputTokens * pricing.output;
     getDb()
       .prepare(

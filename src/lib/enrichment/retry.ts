@@ -99,7 +99,7 @@ export function validateOutreachResponse(parsed: unknown): void {
 export async function callAnthropicWithRetry<T>(
   opts: CallOptions,
 ): Promise<T> {
-  const { client, model = "claude-sonnet-4-20250514", maxTokens, system, userContent, validate, leadId, stage } = opts;
+  const { client, model = "claude-haiku-4-5", maxTokens, system, userContent, validate, leadId, stage } = opts;
 
   // Wrap string system prompts in a cached block so Anthropic can reuse them
   // across calls within the same batch — reduces input token costs by ~70%.
