@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "next start",
     "test": "vitest run",
+    "typecheck": "tsc --noEmit",
     "test:watch": "vitest",
     "dedup:dry": "tsx scripts/dedup-backfill.ts",
     "dedup:apply": "tsx scripts/dedup-backfill.ts --apply"

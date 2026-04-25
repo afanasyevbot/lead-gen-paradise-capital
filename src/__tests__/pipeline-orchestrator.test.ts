@@ -61,7 +61,11 @@ describe("runPipeline", () => {
     expect(ctx.onStageStart).toHaveBeenNthCalledWith(2, "Mock b", 1, 2);
   });
 
-  it("stops on first failure and re-throws", async () => {
+  it("records failure and continues running remaining stages", async () => {
+    // Orchestrator no longer halts on a single failure — one bad stage
+    // (e.g. LinkedIn rate-limited) shouldn't block scoring/outreach for
+    // leads that already have enough data. The failure is recorded on
+    // result.failedStage / result.error and execution continues.
     const stage1 = mockStage("ok", { ok: 1 });
     const stage2: PipelineStage = {
       name: "boom",
@@ -71,13 +75,21 @@ describe("runPipeline", () => {
     const stage3 = mockStage("never", { never: 1 });
 
     const ctx = mockCtx();
+    // Silence expected console.error from orchestrator's catch block
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await expect(runPipeline([stage1, stage2, stage3], ctx)).rejects.toThrow("stage2 exploded");
+    const result = await runPipeline([stage1, stage2, stage3], ctx);
 
-    // stage1 ran, stage2 failed, stage3 never ran
     expect(stage1.execute).toHaveBeenCalledTimes(1);
     expect(stage2.execute).toHaveBeenCalledTimes(1);
-    expect(stage3.execute).toHaveBeenCalledTimes(0);
+    expect(stage3.execute).toHaveBeenCalledTimes(1);
+    expect(result.failedStage).toBe("boom");
+    expect(result.error).toMatch(/stage2 exploded/);
+    expect(result.metrics.boom_error).toBe(1);
+    expect(result.metrics.ok).toBe(1);
+    expect(result.metrics.never).toBe(1);
+
+    errSpy.mockRestore();
   });
 
   it("returns empty metrics for empty stage array", async () => {
@@ -115,15 +127,17 @@ describe("runPipeline", () => {
 describe("stage presets", () => {
   it("CORE_STAGES has 6 stages", () => {
     expect(CORE_STAGES).toHaveLength(6);
+    // Score runs before email-finder so we only burn email-finding API
+    // credits on leads that scored high enough to bother contacting.
     expect(CORE_STAGES.map(s => s.name)).toEqual([
-      "scrape", "linkedin", "extract", "email-finder", "score", "outreach",
+      "scrape", "linkedin", "extract", "score", "email-finder", "outreach",
     ]);
   });
 
   it("ENRICH_ONLY_STAGES has 4 stages (skips scrape + linkedin)", () => {
     expect(ENRICH_ONLY_STAGES).toHaveLength(4);
     expect(ENRICH_ONLY_STAGES.map(s => s.name)).toEqual([
-      "extract", "email-finder", "score", "outreach",
+      "extract", "score", "email-finder", "outreach",
     ]);
   });
 
@@ -141,16 +155,18 @@ describe("stage presets", () => {
     ]);
   });
 
-  it("FULL_PIPELINE_STAGES has 15 stages", () => {
-    expect(FULL_PIPELINE_STAGES).toHaveLength(15);
-    // Verify it's core + deep + founder + premium in order
+  it("FULL_PIPELINE_STAGES has 16 stages", () => {
+    // Core (6) + linkedin-profile deep visit (1) + deep enrichment (4)
+    // + founder analysis (3) + premium chained output (2) = 16
+    expect(FULL_PIPELINE_STAGES).toHaveLength(16);
     const names = FULL_PIPELINE_STAGES.map(s => s.name);
     expect(names[0]).toBe("scrape");
     expect(names[5]).toBe("outreach");
-    expect(names[6]).toBe("social-signals");
-    expect(names[10]).toBe("founder-signals");
-    expect(names[13]).toBe("succession-audit");
-    expect(names[14]).toBe("tenure-legacy-email");
+    expect(names[6]).toBe("linkedin-profile");
+    expect(names[7]).toBe("social-signals");
+    expect(names[11]).toBe("founder-signals");
+    expect(names[14]).toBe("succession-audit");
+    expect(names[15]).toBe("tenure-legacy-email");
   });
 
   it("all stages have unique names", () => {
