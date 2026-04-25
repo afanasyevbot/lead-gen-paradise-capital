@@ -34,49 +34,59 @@ export function acquireLock(pipelineName: string): void {
   ensureLockTable();
   const db = getDb();
 
-  // Auto-release stale locks before trying to acquire. Two criteria:
-  //   1. Hard ceiling: lock older than STALE_LOCK_MINUTES (assume crashed)
-  //   2. Heartbeat-based: no job progress update in STALE_HEARTBEAT_MINUTES
-  //      (catches pipelines killed mid-stage where finally never ran)
-  const existing = db.prepare("SELECT locked, locked_by, locked_at FROM pipeline_lock WHERE id = 1").get() as
-    | { locked: number; locked_by: string | null; locked_at: string | null }
-    | undefined;
-  if (existing?.locked === 1 && existing.locked_at) {
-    const lockAgeMin = (Date.now() - new Date(existing.locked_at).getTime()) / 60000;
-    let shouldRelease = false;
-    let reason = "";
+  // Wrap stale-detection + acquire in a single IMMEDIATE transaction so two
+  // concurrent acquirers can't both observe a stale lock and both succeed.
+  // BEGIN IMMEDIATE takes a RESERVED lock on the DB, serializing writers.
+  const acquire = db.transaction((name: string) => {
+    // Auto-release stale locks before trying to acquire. Two criteria:
+    //   1. Hard ceiling: lock older than STALE_LOCK_MINUTES (assume crashed)
+    //   2. Heartbeat-based: no job progress update in STALE_HEARTBEAT_MINUTES
+    //      (catches pipelines killed mid-stage where finally never ran)
+    const existing = db.prepare("SELECT locked, locked_by, locked_at FROM pipeline_lock WHERE id = 1").get() as
+      | { locked: number; locked_by: string | null; locked_at: string | null }
+      | undefined;
+    if (existing?.locked === 1 && existing.locked_at) {
+      const lockAgeMin = (Date.now() - new Date(existing.locked_at).getTime()) / 60000;
+      let shouldRelease = false;
+      let reason = "";
 
-    if (lockAgeMin > STALE_LOCK_MINUTES) {
-      shouldRelease = true;
-      reason = `lock age ${Math.round(lockAgeMin)}min > ${STALE_LOCK_MINUTES}min`;
-    } else {
-      const heartbeat = lastJobHeartbeatAt();
-      if (heartbeat) {
-        const hbAgeMin = (Date.now() - new Date(heartbeat).getTime()) / 60000;
-        if (hbAgeMin > STALE_HEARTBEAT_MINUTES) {
-          shouldRelease = true;
-          reason = `heartbeat silent for ${Math.round(hbAgeMin)}min > ${STALE_HEARTBEAT_MINUTES}min`;
-        }
-      } else if (lockAgeMin > STALE_HEARTBEAT_MINUTES) {
-        // Lock held but no running job exists at all → definitely stale
+      if (lockAgeMin > STALE_LOCK_MINUTES) {
         shouldRelease = true;
-        reason = `no running job record, lock ${Math.round(lockAgeMin)}min old`;
+        reason = `lock age ${Math.round(lockAgeMin)}min > ${STALE_LOCK_MINUTES}min`;
+      } else {
+        const heartbeat = lastJobHeartbeatAt();
+        if (heartbeat) {
+          const hbAgeMin = (Date.now() - new Date(heartbeat).getTime()) / 60000;
+          if (hbAgeMin > STALE_HEARTBEAT_MINUTES) {
+            shouldRelease = true;
+            reason = `heartbeat silent for ${Math.round(hbAgeMin)}min > ${STALE_HEARTBEAT_MINUTES}min`;
+          }
+        } else if (lockAgeMin > STALE_HEARTBEAT_MINUTES) {
+          // Lock held but no running job exists at all → definitely stale
+          shouldRelease = true;
+          reason = `no running job record, lock ${Math.round(lockAgeMin)}min old`;
+        }
+      }
+
+      if (shouldRelease) {
+        console.warn(`[PIPELINE LOCK] Auto-releasing "${existing.locked_by}" — ${reason}`);
+        // Release inline within the transaction so the UPDATE below sees locked=0.
+        db.prepare("UPDATE pipeline_lock SET locked = 0, locked_by = NULL, locked_at = NULL WHERE id = 1").run();
       }
     }
 
-    if (shouldRelease) {
-      console.warn(`[PIPELINE LOCK] Auto-releasing "${existing.locked_by}" — ${reason}`);
-      releaseLock();
-    }
-  }
+    const result = db.prepare(`
+      UPDATE pipeline_lock
+      SET locked = 1, locked_by = ?, locked_at = datetime('now')
+      WHERE id = 1 AND locked = 0
+    `).run(name);
 
-  const result = db.prepare(`
-    UPDATE pipeline_lock
-    SET locked = 1, locked_by = ?, locked_at = datetime('now')
-    WHERE id = 1 AND locked = 0
-  `).run(pipelineName);
+    return result.changes;
+  }).immediate;
 
-  if (result.changes === 0) {
+  const changes = acquire(pipelineName);
+
+  if (changes === 0) {
     const current = db.prepare("SELECT locked_by, locked_at FROM pipeline_lock WHERE id = 1").get() as
       | { locked_by: string; locked_at: string }
       | undefined;

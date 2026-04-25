@@ -151,24 +151,23 @@ async function findLinkedInProfile(
 export async function findLinkedInProfiles(
   limit = 50,
   onProgress?: ProgressCallback,
+  leadId?: number,
 ): Promise<{ found: number; not_found: number; failed: number; skipped: number }> {
   const db = getDb();
 
   // linkedin_data table is created by the unified schema in db.ts.
   // No duplicate CREATE TABLE needed here.
 
-  const rows = db
-    .prepare(
-      `SELECT l.id, l.business_name, l.city, l.state,
+  const baseSelect = `SELECT l.id, l.business_name, l.city, l.state,
               ed.data as enrichment_json
        FROM leads l
        LEFT JOIN enrichment_data ed ON ed.lead_id = l.id
-       LEFT JOIN linkedin_data ld ON ld.lead_id = l.id
-       WHERE ld.id IS NULL
-         AND l.enrichment_status NOT IN ('pending', 'scrape_failed')
-       LIMIT ?`
-    )
-    .all(limit) as {
+       LEFT JOIN linkedin_data ld ON ld.lead_id = l.id`;
+
+  const rows = (leadId !== undefined
+    ? db.prepare(`${baseSelect} WHERE l.id = ? LIMIT 1`).all(leadId)
+    : db.prepare(`${baseSelect} WHERE ld.id IS NULL AND l.enrichment_status NOT IN ('pending', 'scrape_failed') LIMIT ?`).all(limit)
+  ) as {
       id: number;
       business_name: string;
       city: string | null;

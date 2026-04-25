@@ -211,25 +211,34 @@ export async function generateOutreachEmails(
   minScore = 5,
   limit = 20,
   onProgress?: ProgressCallback,
+  leadId?: number,
 ): Promise<{ generated: number; skipped: number; failed: number }> {
   const db = getDb();
   const client = createAnthropicClient();
 
   // outreach_data table is created by the unified schema in db.ts.
 
-  const rows = db
-    .prepare(
-      `SELECT l.*, ed.data as enrichment_json, sd.data as scoring_json
-       FROM leads l
-       JOIN enrichment_data ed ON ed.lead_id = l.id
-       JOIN scoring_data sd ON sd.lead_id = l.id
-       WHERE l.enrichment_status IN ('scored', 'outreach_failed')
-         AND sd.score >= ?
-         AND sd.recommended_action IN ('reach_out_now', 'reach_out_warm', 'offer_booklet')
-       ORDER BY sd.score DESC
-       LIMIT ?`
-    )
-    .all(minScore, limit) as (Record<string, unknown> & {
+  const rows = (leadId !== undefined
+    ? db.prepare(
+        `SELECT l.*, ed.data as enrichment_json, sd.data as scoring_json
+         FROM leads l
+         JOIN enrichment_data ed ON ed.lead_id = l.id
+         JOIN scoring_data sd ON sd.lead_id = l.id
+         WHERE l.id = ?
+         LIMIT 1`
+      ).all(leadId)
+    : db.prepare(
+        `SELECT l.*, ed.data as enrichment_json, sd.data as scoring_json
+         FROM leads l
+         JOIN enrichment_data ed ON ed.lead_id = l.id
+         JOIN scoring_data sd ON sd.lead_id = l.id
+         WHERE l.enrichment_status IN ('scored', 'outreach_failed')
+           AND sd.score >= ?
+           AND sd.recommended_action IN ('reach_out_now', 'reach_out_warm', 'offer_booklet')
+         ORDER BY sd.score DESC
+         LIMIT ?`
+      ).all(minScore, limit)
+  ) as (Record<string, unknown> & {
       id: number;
       business_name: string;
       enrichment_json: string;

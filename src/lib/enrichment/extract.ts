@@ -89,24 +89,24 @@ FAITH SIGNALS — capture any reference to:
 export async function enrichLeads(
   limit = 50,
   onProgress?: ProgressCallback,
+  leadId?: number,
 ): Promise<{ enriched: number; failed: number }> {
   const db = getDb();
   const client = createAnthropicClient();
 
   // enrichment_data table is created by the unified schema in db.ts.
 
-  const rows = db
-    .prepare(
-      `SELECT l.id, l.business_name, l.website, l.source, sc.all_text,
+  const baseSelect = `SELECT l.id, l.business_name, l.website, l.source, sc.all_text,
               ld.linkedin_url, ld.owner_name_from_linkedin, ld.owner_title_from_linkedin, ld.linkedin_headline,
               ld.profile_data
        FROM leads l
        JOIN scraped_content sc ON sc.lead_id = l.id
-       LEFT JOIN linkedin_data ld ON ld.lead_id = l.id
-       WHERE l.enrichment_status = 'scraped'
-       LIMIT ?`
-    )
-    .all(limit) as {
+       LEFT JOIN linkedin_data ld ON ld.lead_id = l.id`;
+
+  const rows = (leadId !== undefined
+    ? db.prepare(`${baseSelect} WHERE l.id = ? LIMIT 1`).all(leadId)
+    : db.prepare(`${baseSelect} WHERE l.enrichment_status = 'scraped' LIMIT ?`).all(limit)
+  ) as {
       id: number; business_name: string; website: string; source: string; all_text: string;
       linkedin_url: string | null; owner_name_from_linkedin: string | null;
       owner_title_from_linkedin: string | null; linkedin_headline: string | null;

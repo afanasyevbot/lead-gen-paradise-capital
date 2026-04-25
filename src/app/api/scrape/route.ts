@@ -3,6 +3,8 @@ import { createJob, updateJobProgress, completeJob, failJob } from "@/lib/jobs";
 import { searchPlaces, interQueryDelay } from "@/lib/scraper/google-maps";
 import { upsertLead } from "@/lib/db";
 import { SEARCH_PRESETS } from "@/lib/config";
+import { acquireLock, releaseLock } from "@/lib/pipeline-lock";
+import { rateLimit, clientKey } from "@/lib/rate-limit";
 import fs from "fs";
 import path from "path";
 
@@ -46,6 +48,14 @@ function loadAllPresets(): Record<string, string[]> {
 
 export async function POST(req: NextRequest) {
   try {
+    const rl = rateLimit(clientKey(req, "scrape"), { capacity: 5, windowMs: 60_000 });
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { error: "Too many scrape requests" },
+        { status: 429, headers: { "Retry-After": String(Math.ceil(rl.retryAfterMs / 1000)) } }
+      );
+    }
+
     const body = await req.json();
     const {
       preset,
@@ -72,6 +82,15 @@ export async function POST(req: NextRequest) {
     }
     if (!queries.length) {
       return NextResponse.json({ error: "Provide preset or queries" }, { status: 400 });
+    }
+
+    // Prevent concurrent scrape jobs — they share the Playwright browser pool
+    // and Google rate-limits aggressively. Refuse the request rather than
+    // queueing so the caller knows to wait.
+    try {
+      acquireLock("scrape");
+    } catch (e) {
+      return NextResponse.json({ error: String(e) }, { status: 409 });
     }
 
     const job = createJob("scrape");
@@ -138,6 +157,8 @@ export async function POST(req: NextRequest) {
         completeJob(job.id, counts);
       } catch (e) {
         failJob(job.id, String(e));
+      } finally {
+        releaseLock();
       }
     })();
 

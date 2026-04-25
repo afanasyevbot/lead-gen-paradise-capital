@@ -123,24 +123,24 @@ RECOMMENDED ACTION GUIDE:
 export async function scoreLeads(
   limit = 50,
   onProgress?: ProgressCallback,
+  leadId?: number,
 ): Promise<{ scored: number; failed: number }> {
   const db = getDb();
   const client = createAnthropicClient();
 
   // scoring_data table is created by the unified schema in db.ts.
 
-  const rows = db
-    .prepare(
-      `SELECT l.*, ed.data as enrichment_json,
+  const baseSelect = `SELECT l.*, ed.data as enrichment_json,
               ld.linkedin_url, ld.owner_name_from_linkedin, ld.owner_title_from_linkedin, ld.linkedin_headline,
               ld.profile_data
        FROM leads l
        JOIN enrichment_data ed ON ed.lead_id = l.id
-       LEFT JOIN linkedin_data ld ON ld.lead_id = l.id
-       WHERE l.enrichment_status = 'enriched'
-       LIMIT ?`
-    )
-    .all(limit) as (Record<string, unknown> & {
+       LEFT JOIN linkedin_data ld ON ld.lead_id = l.id`;
+
+  const rows = (leadId !== undefined
+    ? db.prepare(`${baseSelect} WHERE l.id = ? LIMIT 1`).all(leadId)
+    : db.prepare(`${baseSelect} WHERE l.enrichment_status = 'enriched' LIMIT ?`).all(limit)
+  ) as (Record<string, unknown> & {
       id: number; business_name: string; enrichment_json: string;
       linkedin_url: string | null; owner_name_from_linkedin: string | null;
       owner_title_from_linkedin: string | null; linkedin_headline: string | null;

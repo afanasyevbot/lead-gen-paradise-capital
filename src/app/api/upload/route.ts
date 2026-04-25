@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getDb, upsertLead } from "@/lib/db";
+import { rateLimit, clientKey } from "@/lib/rate-limit";
 
 /**
  * POST /api/upload
@@ -220,6 +221,14 @@ function upsertApolloEnrichment(
 
 export async function POST(req: NextRequest) {
   try {
+    const rl = rateLimit(clientKey(req, "upload"), { capacity: 10, windowMs: 60_000 });
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { error: "Too many uploads — slow down" },
+        { status: 429, headers: { "Retry-After": String(Math.ceil(rl.retryAfterMs / 1000)) } }
+      );
+    }
+
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
 
@@ -229,6 +238,16 @@ export async function POST(req: NextRequest) {
 
     if (!file.name.endsWith(".csv")) {
       return NextResponse.json({ error: "Only CSV files are supported" }, { status: 400 });
+    }
+
+    // Hard cap on upload size so a malicious or accidental huge file can't
+    // OOM the server. 50 MB ≈ 200k Apollo rows — well above any real export.
+    const MAX_BYTES = 50 * 1024 * 1024;
+    if (file.size > MAX_BYTES) {
+      return NextResponse.json(
+        { error: `File too large: ${(file.size / 1024 / 1024).toFixed(1)}MB > 50MB limit` },
+        { status: 413 }
+      );
     }
 
     const text = await file.text();
@@ -242,8 +261,11 @@ export async function POST(req: NextRequest) {
     let inserted = 0;
     let updated = 0;
     let skipped = 0;
+    let failed = 0;
+    const failures: { row: number; error: string }[] = [];
 
-    for (const row of rows) {
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
       try {
         const { lead, contactInfo } = mapRow(row);
 
@@ -265,8 +287,15 @@ export async function POST(req: NextRequest) {
         if (dbLead && (contactInfo.email || contactInfo.firstName)) {
           upsertApolloEnrichment(dbLead.id, contactInfo, row);
         }
-      } catch {
-        skipped++;
+      } catch (err) {
+        // Distinguish parse/upsert errors from intentional skips. Capture the
+        // first 20 so the caller can debug bad CSV input rather than getting
+        // silent skip counts that hide every kind of failure.
+        failed++;
+        if (failures.length < 20) {
+          failures.push({ row: i + 1, error: String(err) });
+        }
+        console.error(`[UPLOAD] row ${i + 1} failed:`, err);
       }
     }
 
@@ -275,6 +304,8 @@ export async function POST(req: NextRequest) {
       inserted,
       updated,
       skipped,
+      failed,
+      failures,
       total: rows.length,
     });
   } catch (e) {

@@ -50,7 +50,7 @@ export async function POST(
         // Clear existing linkedin data so it gets re-processed
         try { db.prepare("DELETE FROM linkedin_data WHERE lead_id = ?").run(leadId); } catch { /* */ }
 
-        const result = await findLinkedInProfiles(1);
+        const result = await findLinkedInProfiles(1, undefined, leadId);
         return NextResponse.json({ success: true, action: "linkedin", ...result });
       }
 
@@ -64,15 +64,9 @@ export async function POST(
         // Clear existing enrichment so it gets re-processed
         try { db.prepare("DELETE FROM enrichment_data WHERE lead_id = ?").run(leadId); } catch { /* */ }
 
-        // Set status to 'scraped' so enrichLeads picks it up
-        const origStatus = lead.enrichment_status;
-        db.prepare("UPDATE leads SET enrichment_status = 'scraped', updated_at = datetime('now') WHERE id = ?").run(leadId);
-
-        const result = await enrichLeads(1); // limit=1, this lead is first because we just set it
+        const result = await enrichLeads(1, undefined, leadId);
 
         if (result.enriched === 0 && result.failed > 0) {
-          // Restore status if it failed
-          db.prepare("UPDATE leads SET enrichment_status = ?, updated_at = datetime('now') WHERE id = ?").run(origStatus, leadId);
           return NextResponse.json({ error: "Extraction failed" }, { status: 500 });
         }
 
@@ -107,10 +101,7 @@ export async function POST(
         // Clear existing score
         try { db.prepare("DELETE FROM scoring_data WHERE lead_id = ?").run(leadId); } catch { /* */ }
 
-        // Set status to 'enriched' so scoreLeads picks it up
-        db.prepare("UPDATE leads SET enrichment_status = 'enriched', updated_at = datetime('now') WHERE id = ?").run(leadId);
-
-        const result = await scoreLeads(1);
+        const result = await scoreLeads(1, undefined, leadId);
 
         if (result.scored === 0 && result.failed > 0) {
           return NextResponse.json({ error: "Scoring failed" }, { status: 500 });
@@ -129,10 +120,7 @@ export async function POST(
         // Clear existing outreach
         try { db.prepare("DELETE FROM outreach_data WHERE lead_id = ?").run(leadId); } catch { /* */ }
 
-        // Set status to 'scored' so outreach picks it up
-        db.prepare("UPDATE leads SET enrichment_status = 'scored', updated_at = datetime('now') WHERE id = ?").run(leadId);
-
-        const result = await generateOutreachEmails(body.minScore || 1, 1);
+        const result = await generateOutreachEmails(body.minScore || 1, 1, undefined, leadId);
         return NextResponse.json({ success: true, action: "outreach", ...result });
       }
 

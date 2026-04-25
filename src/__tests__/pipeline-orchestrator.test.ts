@@ -72,7 +72,7 @@ describe("runPipeline", () => {
       description: "Mock boom",
       execute: vi.fn().mockRejectedValue(new Error("stage2 exploded")),
     };
-    const stage3 = mockStage("never", { never: 1 });
+    const stage3 = mockStage("after", { after: 1 });
 
     const ctx = mockCtx();
     // Silence expected console.error from orchestrator's catch block
@@ -80,14 +80,18 @@ describe("runPipeline", () => {
 
     const result = await runPipeline([stage1, stage2, stage3], ctx);
 
+    // All stages execute — orchestrator does NOT halt on stage failure.
     expect(stage1.execute).toHaveBeenCalledTimes(1);
     expect(stage2.execute).toHaveBeenCalledTimes(1);
     expect(stage3.execute).toHaveBeenCalledTimes(1);
+
     expect(result.failedStage).toBe("boom");
-    expect(result.error).toMatch(/stage2 exploded/);
+    expect(result.error).toContain("stage2 exploded");
     expect(result.metrics.boom_error).toBe(1);
     expect(result.metrics.ok).toBe(1);
-    expect(result.metrics.never).toBe(1);
+    expect(result.metrics.after).toBe(1);
+    // stagesCompleted counts only successful stages
+    expect(result.stagesCompleted).toBe(2);
 
     errSpy.mockRestore();
   });
@@ -125,7 +129,7 @@ describe("runPipeline", () => {
 // ─── Stage Preset Tests ─────────────────────────────────────────────────────
 
 describe("stage presets", () => {
-  it("CORE_STAGES has 6 stages", () => {
+  it("CORE_STAGES has 6 stages (score before email-finder)", () => {
     expect(CORE_STAGES).toHaveLength(6);
     // Score runs before email-finder so we only burn email-finding API
     // credits on leads that scored high enough to bother contacting.
