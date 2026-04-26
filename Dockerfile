@@ -40,18 +40,34 @@ ENV SENTRY_DSN=$SENTRY_DSN \
 
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# Diagnostic: verify Sentry build vars are populated. Prints "set"/"unset" only,
-# never the value. Remove after sourcemap upload is confirmed working.
-RUN echo "SENTRY_DSN: $([ -n \"$SENTRY_DSN\" ] && echo set || echo unset)" && \
-    echo "SENTRY_ORG: ${SENTRY_ORG:-unset}" && \
-    echo "SENTRY_PROJECT: ${SENTRY_PROJECT:-unset}" && \
-    echo "SENTRY_AUTH_TOKEN: $([ -n \"$SENTRY_AUTH_TOKEN\" ] && echo set || echo unset)"
+# Capture the Railway commit SHA as the Sentry release tag so build-time
+# source-map upload and runtime error reports tag the same release.
+ARG RAILWAY_GIT_COMMIT_SHA
+ENV SENTRY_RELEASE=$RAILWAY_GIT_COMMIT_SHA
 
 RUN npm run build
+
+# Source-map upload via sentry-cli (bundler-agnostic; works with Turbopack,
+# which @sentry/nextjs's webpack plugin doesn't). Skipped automatically when
+# auth/org/project aren't set so local Docker builds keep working.
+RUN if [ -n "$SENTRY_AUTH_TOKEN" ] && [ -n "$SENTRY_ORG" ] && [ -n "$SENTRY_PROJECT" ] && [ -n "$SENTRY_RELEASE" ]; then \
+      npx --yes @sentry/cli@latest sourcemaps inject .next && \
+      npx --yes @sentry/cli@latest sourcemaps upload --release="$SENTRY_RELEASE" .next && \
+      npx --yes @sentry/cli@latest releases finalize "$SENTRY_RELEASE"; \
+    else \
+      echo "Sentry vars missing — skipping source-map upload"; \
+    fi
 
 # ── Production ────────────────────────────────────────────────────────────
 FROM base AS runner
 WORKDIR /app
+
+# Forward Sentry runtime config so the SDK tags errors with the same release
+# we just uploaded source maps for. DSN is required at runtime to send events.
+ARG SENTRY_DSN
+ARG RAILWAY_GIT_COMMIT_SHA
+ENV SENTRY_DSN=$SENTRY_DSN \
+    SENTRY_RELEASE=$RAILWAY_GIT_COMMIT_SHA
 
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
