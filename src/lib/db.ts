@@ -212,6 +212,8 @@ const FALLBACK_SCHEMA = `
 // Import them here for local use in this file.
 import type { Lead, LeadFilters, EnrichmentStatus } from "@/domain/types";
 import { validateTransition } from "@/domain/lead";
+import { buildLeadsWhere, buildLeadsSort } from "@/lib/db/query-builder";
+import { getOptionalRow, getOptionalJson } from "@/lib/db/optional-table";
 
 /**
  * Set a lead's enrichment status with transition validation.
@@ -240,70 +242,19 @@ export function setLeadStatus(leadId: number, newStatus: EnrichmentStatus): void
 
 export function getLeads(filters: LeadFilters = {}) {
   const db = getDb();
-  const conditions: string[] = [];
-  const params: unknown[] = [];
-
-  if (filters.status) {
-    conditions.push("enrichment_status = ?");
-    params.push(filters.status);
-  }
-  if (filters.minRating != null) {
-    conditions.push("google_rating >= ?");
-    params.push(filters.minRating);
-  }
-  if (filters.hasWebsite) {
-    conditions.push("website IS NOT NULL AND website != ''");
-  }
-  if (filters.excludeChains) {
-    conditions.push("is_chain = 0");
-  }
-  if (filters.search) {
-    conditions.push("business_name LIKE ?");
-    params.push(`%${filters.search}%`);
-  }
-  if (filters.scoreTier === "high") {
-    conditions.push("s.score >= 7");
-  } else if (filters.scoreTier === "medium") {
-    conditions.push("s.score >= 4 AND s.score < 7");
-  } else if (filters.scoreTier === "low") {
-    conditions.push("s.score < 4 AND s.score IS NOT NULL");
-  } else if (filters.scoreTier === "unscored") {
-    conditions.push("s.score IS NULL");
-  }
-  if (filters.hasEmail === true) {
-    conditions.push("fe.email IS NOT NULL");
-  } else if (filters.hasEmail === false) {
-    conditions.push("fe.email IS NULL");
-  }
-
-  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-  const sortCol = filters.sortBy || "id";
-  const sortDir = filters.sortOrder === "asc" ? "ASC" : "DESC";
-  const allowedCols = [
-    "id", "business_name", "city", "state",
-    "enrichment_status", "created_at", "updated_at", "score",
-  ];
-  const safeSort = allowedCols.includes(sortCol) ? sortCol : "id";
-  const sortExpr = safeSort === "score" ? "s.score" : `l.${safeSort}`;
+  const { sql: where, params } = buildLeadsWhere(filters);
+  const { expr: sortExpr, dir: sortDir } = buildLeadsSort(filters);
 
   const pageSize = filters.pageSize || 50;
   const page = filters.page || 1;
   const offset = (page - 1) * pageSize;
-
-  // Qualify conditions with table prefix for the JOIN
-  const qualifiedWhere = where
-    .replace(/enrichment_status/g, "l.enrichment_status")
-    .replace(/google_rating/g, "l.google_rating")
-    .replace(/website /g, "l.website ")
-    .replace(/is_chain/g, "l.is_chain")
-    .replace(/business_name/g, "l.business_name");
 
   const total = db
     .prepare(
       `SELECT COUNT(*) as count FROM leads l
        LEFT JOIN scoring_data s ON s.lead_id = l.id
        LEFT JOIN email_candidates fe ON fe.lead_id = l.id AND fe.is_primary = 1
-       ${qualifiedWhere}`
+       ${where}`
     )
     .get(...params) as { count: number };
 
@@ -315,7 +266,7 @@ export function getLeads(filters: LeadFilters = {}) {
        FROM leads l
        LEFT JOIN scoring_data s ON s.lead_id = l.id
        LEFT JOIN email_candidates fe ON fe.lead_id = l.id AND fe.is_primary = 1
-       ${qualifiedWhere}
+       ${where}
        ORDER BY ${sortExpr} ${sortDir} LIMIT ? OFFSET ?`
     )
     .all(...params, pageSize, offset) as (Lead & { exit_score: number | null; score_reason: string | null; founder_email: string | null; email_source: string | null })[];
@@ -349,70 +300,34 @@ export function getLeadDetail(id: number) {
     .prepare("SELECT * FROM linkedin_data WHERE lead_id = ?")
     .get(id) as Record<string, unknown> | undefined;
 
-  // Deep enrichment data (social intros + content hooks)
-  let socialIntro = null;
-  try {
-    const si = db.prepare("SELECT * FROM social_intros WHERE lead_id = ?").get(id) as Record<string, unknown> | undefined;
-    socialIntro = si ? JSON.parse(si.intro_json as string) : null;
-  } catch { /* table may not exist yet */ }
+  const socialIntro = getOptionalJson(db, "social_intros", id, "intro_json");
+  const contentHooks = getOptionalJson(db, "content_hooks", id, "hooks_json");
 
-  let contentHooks = null;
-  try {
-    const ch = db.prepare("SELECT * FROM content_hooks WHERE lead_id = ?").get(id) as Record<string, unknown> | undefined;
-    contentHooks = ch ? JSON.parse(ch.hooks_json as string) : null;
-  } catch { /* table may not exist yet */ }
+  const ssRow = getOptionalRow(db, "social_signals", id);
+  const socialSignals = ssRow
+    ? {
+        linkedin_about: ssRow.linkedin_about as string | null,
+        twitter_posts: ssRow.twitter_posts ? JSON.parse(ssRow.twitter_posts as string) : [],
+        press_releases: ssRow.press_releases ? JSON.parse(ssRow.press_releases as string) : [],
+      }
+    : null;
 
-  let socialSignals = null;
-  try {
-    const ss = db.prepare("SELECT * FROM social_signals WHERE lead_id = ?").get(id) as Record<string, unknown> | undefined;
-    if (ss) {
-      socialSignals = {
-        linkedin_about: ss.linkedin_about as string | null,
-        twitter_posts: ss.twitter_posts ? JSON.parse(ss.twitter_posts as string) : [],
-        press_releases: ss.press_releases ? JSON.parse(ss.press_releases as string) : [],
-      };
-    }
-  } catch { /* table may not exist yet */ }
+  const founderProfile = getOptionalJson(db, "founder_profiles", id, "profile_json");
 
-  // Founder profile, succession news, legacy outreach
-  let founderProfile = null;
-  try {
-    const fp = db.prepare("SELECT * FROM founder_profiles WHERE lead_id = ?").get(id) as Record<string, unknown> | undefined;
-    founderProfile = fp ? JSON.parse(fp.profile_json as string) : null;
-  } catch { /* table may not exist yet */ }
+  const snRow = getOptionalRow(db, "succession_news", id);
+  const successionNews = snRow
+    ? {
+        owner_signals: snRow.owner_signals ? JSON.parse(snRow.owner_signals as string) : [],
+        industry_signals: snRow.industry_signals ? JSON.parse(snRow.industry_signals as string) : [],
+        total_signals: snRow.total_signals as number,
+        strongest_signal: snRow.strongest_signal as string | null,
+      }
+    : null;
 
-  let successionNews = null;
-  try {
-    const sn = db.prepare("SELECT * FROM succession_news WHERE lead_id = ?").get(id) as Record<string, unknown> | undefined;
-    if (sn) {
-      successionNews = {
-        owner_signals: sn.owner_signals ? JSON.parse(sn.owner_signals as string) : [],
-        industry_signals: sn.industry_signals ? JSON.parse(sn.industry_signals as string) : [],
-        total_signals: sn.total_signals as number,
-        strongest_signal: sn.strongest_signal as string | null,
-      };
-    }
-  } catch { /* table may not exist yet */ }
+  const legacyOutreach = getOptionalJson(db, "legacy_outreach", id, "outreach_json");
+  const successionAudit = getOptionalJson(db, "succession_audits", id, "audit_json");
+  const tenureLegacyEmail = getOptionalJson(db, "tenure_legacy_emails", id, "email_json");
 
-  let legacyOutreach = null;
-  try {
-    const lo = db.prepare("SELECT * FROM legacy_outreach WHERE lead_id = ?").get(id) as Record<string, unknown> | undefined;
-    legacyOutreach = lo ? JSON.parse(lo.outreach_json as string) : null;
-  } catch { /* table may not exist yet */ }
-
-  let successionAudit = null;
-  try {
-    const sa = db.prepare("SELECT * FROM succession_audits WHERE lead_id = ?").get(id) as Record<string, unknown> | undefined;
-    successionAudit = sa ? JSON.parse(sa.audit_json as string) : null;
-  } catch { /* table may not exist yet */ }
-
-  let tenureLegacyEmail = null;
-  try {
-    const tle = db.prepare("SELECT * FROM tenure_legacy_emails WHERE lead_id = ?").get(id) as Record<string, unknown> | undefined;
-    tenureLegacyEmail = tle ? JSON.parse(tle.email_json as string) : null;
-  } catch { /* table may not exist yet */ }
-
-  // Cost tracking (best-effort — table may not exist on older DBs)
   let costs = null;
   try { costs = getLeadCosts(id); } catch { /* cost table not yet created */ }
 

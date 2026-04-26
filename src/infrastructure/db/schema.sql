@@ -169,3 +169,20 @@ CREATE TABLE IF NOT EXISTS outreach_outcomes (
   outcome_date TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- ─── Founder Emails (waterfall result, one row per lead) ────────────────────
+-- JOINed by /api/instantly/{ready,push}, /api/pipeline/{summary,scored-leads}
+-- and /api/email-enrichment/reset. Must exist at startup, not be created
+-- lazily by email-finder.ts (which produces 500s on a fresh DB).
+
+CREATE TABLE IF NOT EXISTS founder_emails (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id INTEGER UNIQUE NOT NULL REFERENCES leads(id),
+  email TEXT,
+  email_source TEXT,
+  owner_name TEXT,
+  confidence TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_founder_emails_lead_id ON founder_emails(lead_id);

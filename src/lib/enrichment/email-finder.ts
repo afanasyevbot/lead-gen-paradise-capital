@@ -15,18 +15,6 @@ export async function findFounderEmails(
 ): Promise<{ found_website: number; found_hunter: number; found_apollo: number; found_snov: number; not_found: number; failed: number }> {
   const db = getDb();
 
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS founder_emails (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      lead_id INTEGER UNIQUE NOT NULL REFERENCES leads(id),
-      email TEXT,
-      email_source TEXT,
-      owner_name TEXT,
-      confidence TEXT,
-      created_at TEXT NOT NULL
-    )
-  `);
-
   const rows = db
     .prepare(
       `SELECT l.id, l.business_name, l.website, l.city, l.state,
@@ -141,18 +129,6 @@ export async function findEmailForLead(leadId: number): Promise<{
   };
 }> {
   const db = getDb();
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS founder_emails (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      lead_id INTEGER UNIQUE NOT NULL REFERENCES leads(id),
-      email TEXT,
-      email_source TEXT,
-      owner_name TEXT,
-      confidence TEXT,
-      created_at TEXT NOT NULL
-    )
-  `);
 
   // Clear any existing record so waterfall runs fresh
   try { db.prepare("DELETE FROM founder_emails WHERE lead_id = ?").run(leadId); } catch { /* */ }
