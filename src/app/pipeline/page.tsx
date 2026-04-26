@@ -1,270 +1,39 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState } from "react";
 import PipelineHealth from "./PipelineHealth";
-
-interface Job {
-  id: string;
-  status: "running" | "completed" | "failed";
-  progress: { current: number; total: number; stage: string; currentItem: string };
-  result?: Record<string, number>;
-  error?: string;
-  startedAt?: string;
-}
-
-interface PipelineSummary {
-  pipeline: { total: number; pending: number; scraped: number; enriched: number; scored: number; outreach_generated: number; filtered_out: number; failed: number };
-  highlights: { high_score_leads: number; emails_found: number; ready_to_push: number };
-  score_distribution: { legacy_tier: number; high_tier: number; seed_tier: number; below_threshold: number };
-  this_run_scores: { score_8_plus: number; score_7: number; score_5_6: number; score_below_5: number; total_scored: number; filtered_out: number } | null;
-  cost: { total_usd: number; by_stage: Record<string, number>; leads_billed: number };
-}
-
-interface ScoredLead {
-  id: number;
-  business_name: string;
-  website: string | null;
-  city: string | null;
-  state: string | null;
-  score: number;
-  confidence: string;
-  recommended_action: string;
-  avatar_fit?: string;
-  reasoning?: string;
-  primary_signals?: string[];
-  risk_factors?: string[];
-  owner_name?: string;
-  estimated_owner_age?: string;
-  estimated_revenue_range?: string;
-  is_likely_founder?: boolean;
-  has_website?: boolean;
-  has_scraped?: boolean;
-  has_linkedin?: boolean;
-  has_email?: boolean;
-  has_outreach?: boolean;
-  data_completeness?: number;
-}
-
-function CompletenessChips({ lead }: { lead: ScoredLead }) {
-  const chips: { label: string; on: boolean }[] = [
-    { label: "site", on: !!lead.has_website },
-    { label: "scraped", on: !!lead.has_scraped },
-    { label: "li", on: !!lead.has_linkedin },
-    { label: "email", on: !!lead.has_email },
-  ];
-  return (
-    <span className="flex gap-1 shrink-0">
-      {chips.map((c) => (
-        <span key={c.label}
-          title={`${c.label}: ${c.on ? "yes" : "no"}`}
-          className={`text-[9px] px-1 py-0.5 rounded leading-none tabular-nums ${
-            c.on ? "bg-green-900/50 text-green-300" : "bg-[var(--border)] text-[var(--muted)] opacity-50"
-          }`}>
-          {c.label}
-        </span>
-      ))}
-    </span>
-  );
-}
-
-const CORE_STAGES = [
-  { key: "scrape-websites", label: "Websites", desc: "Scrape lead websites" },
-  { key: "linkedin", label: "LinkedIn", desc: "Find owner profiles" },
-  { key: "extract", label: "Extract", desc: "Founder + age + revenue signals" },
-  { key: "score", label: "Score", desc: "Avatar fit scoring" },
-  { key: "emails", label: "Emails", desc: "Find founder emails" },
-  { key: "outreach", label: "Outreach", desc: "Tiered emails for Paul" },
-];
-
-const ENRICH_STAGES = [
-  { key: "extract", label: "Extract", desc: "Founder + age + revenue signals" },
-  { key: "score", label: "Score", desc: "Avatar fit scoring" },
-  { key: "emails", label: "Emails", desc: "Find founder emails" },
-  { key: "outreach", label: "Outreach", desc: "Tiered emails for Paul" },
-];
-
-type PipelineMode = "core" | "enrich-only";
-
-const PIPELINE_CONFIGS: { key: PipelineMode; label: string; desc: string; endpoint: string; stages: typeof CORE_STAGES }[] = [
-  {
-    key: "core",
-    label: "Full Pipeline (6 stages)",
-    desc: "Scrape websites → LinkedIn → Extract → Score → Emails → Outreach",
-    endpoint: "/api/pipeline",
-    stages: CORE_STAGES,
-  },
-  {
-    key: "enrich-only",
-    label: "Enrich Only (4 stages)",
-    desc: "Skip scraping — extract, score, find emails & write outreach for already-scraped leads",
-    endpoint: "/api/enrich-only",
-    stages: ENRICH_STAGES,
-  },
-];
-
-function SummaryStat({ label, value, tone, hint }: { label: string; value: number; tone: "green" | "yellow" | "red" | "neutral"; hint?: string }) {
-  const toneClass = {
-    green: "text-green-400",
-    yellow: "text-yellow-400",
-    red: "text-red-400",
-    neutral: "text-[var(--fg)]",
-  }[tone];
-  const dimmed = value === 0 ? "opacity-40" : "";
-  return (
-    <div className={`flex flex-col ${dimmed}`}>
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-xs text-[var(--muted)]">{label}</span>
-        <span className={`text-lg font-bold tabular-nums ${toneClass}`}>{value}</span>
-      </div>
-      {hint && <span className="text-[10px] text-[var(--muted)] italic">{hint}</span>}
-    </div>
-  );
-}
-
-const TIER_COLORS: Record<string, { text: string; bg: string }> = {
-  "green-400": { text: "text-green-400", bg: "bg-green-400" },
-  "green-300": { text: "text-green-300", bg: "bg-green-300" },
-  "yellow-400": { text: "text-yellow-400", bg: "bg-yellow-400" },
-  "gray-500": { text: "text-gray-500", bg: "bg-gray-500" },
-};
-
-function ScoreTier({ label, sublabel, count, total, color }: { label: string; sublabel: string; count: number; total: number; color: keyof typeof TIER_COLORS }) {
-  const pct = total > 0 ? Math.round((count / total) * 100) : 0;
-  const c = TIER_COLORS[color];
-  return (
-    <div>
-      <div className="flex items-baseline justify-between text-sm mb-1">
-        <span className={c.text}>
-          <strong>{label}</strong> <span className="text-[var(--muted)] text-xs">· {sublabel}</span>
-        </span>
-        <span className="tabular-nums">
-          <strong>{count}</strong> <span className="text-[var(--muted)] text-xs">({pct}%)</span>
-        </span>
-      </div>
-      <div className="w-full bg-[var(--border)] rounded-full h-1">
-        <div className={`${c.bg} h-1 rounded-full transition-all`} style={{ width: `${pct}%` }} />
-      </div>
-    </div>
-  );
-}
-
-function StageBox({ stage, isActive, isDone }: { stage: { key: string; label: string; desc: string }; isActive: boolean; isDone: boolean }) {
-  return (
-    <div
-      className={`p-3 rounded-lg border text-center text-xs ${
-        isActive
-          ? "border-[var(--accent)] bg-blue-950"
-          : isDone
-          ? "border-green-800 bg-green-950"
-          : "border-[var(--border)] bg-[var(--card)]"
-      }`}
-    >
-      <p className="font-semibold text-sm">{stage.label}</p>
-      <p className="text-[var(--muted)] text-[10px] mt-0.5">{stage.desc}</p>
-      {isActive && <p className="text-[var(--accent)] mt-1 animate-pulse text-[10px]">Running...</p>}
-      {isDone && <p className="text-green-400 mt-1 text-[10px]">Done</p>}
-    </div>
-  );
-}
+import { CompletenessChips } from "./_components/CompletenessChips";
+import { SummaryStat } from "./_components/SummaryStat";
+import { ScoreTier } from "./_components/ScoreTier";
+import { StageBox } from "./_components/StageBox";
+import { PIPELINE_CONFIGS } from "./_lib/pipeline-config";
+import type { PipelineMode } from "./_lib/types";
+import { useJobPolling } from "./_hooks/useJobPolling";
 
 export default function PipelinePage() {
-  const [job, setJob] = useState<Job | null>(null);
-  const [running, setRunning] = useState(false);
   const [limit, setLimit] = useState(50);
   const [minScore, setMinScore] = useState(5);
   const [mode, setMode] = useState<PipelineMode>("core");
-  const [summary, setSummary] = useState<PipelineSummary | null>(null);
-  const [scoredLeads, setScoredLeads] = useState<ScoredLead[]>([]);
-  const [scoredLeadsState, setScoredLeadsState] = useState<"idle" | "loading" | "loaded" | "error">("idle");
-  const [scoredLeadsError, setScoredLeadsError] = useState<string | null>(null);
   const [expandedLead, setExpandedLead] = useState<number | null>(null);
   const [xrayReset, setXrayReset] = useState<number | null>(null);
-  const [lockError, setLockError] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  async function resetXrayLeads() {
-    const r = await fetch("/api/leads?action=reset-xray", { method: "PATCH" });
-    const { reset } = await r.json();
-    setXrayReset(reset);
-  }
+  const {
+    job,
+    running,
+    summary,
+    scoredLeads,
+    scoredLeadsState,
+    scoredLeadsError,
+    lockError,
+    runPipeline,
+    clearLock,
+  } = useJobPolling();
 
   const config = PIPELINE_CONFIGS.find((c) => c.key === mode)!;
 
-  useEffect(() => {
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, []);
-
-  async function runPipeline() {
-    setRunning(true);
-    setJob(null);
-    setSummary(null);
-    setScoredLeads([]);
-    setScoredLeadsState("idle");
-    setScoredLeadsError(null);
+  function handleRun() {
     setExpandedLead(null);
-
-    const res = await fetch(config.endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ limit, minScore }),
-    });
-    const body = await res.json();
-
-    if (!res.ok) {
-      setRunning(false);
-      const msg = body?.error ?? `Error ${res.status}`;
-      if (res.status === 409) setLockError(msg);
-      setJob({ id: "", status: "failed", progress: { current: 0, total: 0, stage: "", currentItem: "" }, error: msg, startedAt: undefined });
-      return;
-    }
-    setLockError(null);
-
-    const { jobId } = body;
-
-    pollRef.current = setInterval(async () => {
-      const r = await fetch(`/api/jobs/${jobId}`);
-      if (!r.ok) {
-        // Job not found or server error — stop polling gracefully
-        if (pollRef.current) clearInterval(pollRef.current);
-        setRunning(false);
-        return;
-      }
-      const j: Job = await r.json();
-      setJob(j);
-      if (j.status !== "running") {
-        if (pollRef.current) clearInterval(pollRef.current);
-        setRunning(false);
-        // Fetch meaningful summary after completion — pass job start time for cost scoping
-        const since = encodeURIComponent(j.startedAt ?? "");
-        fetch(`/api/pipeline/summary?since=${since}`)
-          .then((r) => r.json())
-          .then(setSummary)
-          .catch(() => {});
-        const scoredCount = j.result?.scored ?? 0;
-        // Always fetch — even if scored=0, we want to show the most recent
-        // scored leads (useful for enrich-only re-runs). Fallback to 20.
-        const fetchLimit = scoredCount > 0 ? scoredCount : 20;
-        setScoredLeadsState("loading");
-        // Scope to this run's start time so we don't surface stale leads
-        // from earlier runs when the current run scored few/no leads.
-        fetch(`/api/pipeline/scored-leads?limit=${fetchLimit}&since=${since}`)
-          .then(async (r) => {
-            if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text().catch(() => "")}`);
-            return r.json();
-          })
-          .then((d) => {
-            const leads = (d.leads ?? []) as ScoredLead[];
-            setScoredLeads([...leads].sort((a, b) => b.score - a.score));
-            setScoredLeadsState("loaded");
-          })
-          .catch((err) => {
-            setScoredLeadsError(err instanceof Error ? err.message : String(err));
-            setScoredLeadsState("error");
-          });
-      }
-    }, 2000);
+    runPipeline({ endpoint: config.endpoint, limit, minScore });
   }
 
   const activeStageIdx = job?.progress.stage
@@ -395,10 +164,7 @@ export default function PipelinePage() {
           <div className="bg-red-950/40 border border-red-800/40 rounded-lg p-3 text-sm">
             <p className="text-red-300 mb-2">{lockError}</p>
             <button
-              onClick={async () => {
-                await fetch("/api/pipeline", { method: "DELETE" });
-                setLockError(null);
-              }}
+              onClick={clearLock}
               className="px-3 py-1.5 bg-red-800 hover:bg-red-700 text-white rounded text-xs font-medium"
             >
               Force Clear Lock &amp; Try Again
@@ -407,7 +173,7 @@ export default function PipelinePage() {
         )}
 
         <button
-          onClick={runPipeline}
+          onClick={handleRun}
           disabled={running}
           className="w-full px-4 py-3 bg-[var(--accent)] text-white rounded-lg text-sm font-medium hover:opacity-90 disabled:opacity-50"
         >
