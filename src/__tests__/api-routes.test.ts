@@ -3,82 +3,19 @@
  *
  * Spins up a real SQLite DB at a temp path, seeds rows, and invokes the
  * exported route handlers directly with NextRequest. No HTTP server.
+ *
+ * Shared setup (DB lifecycle, seedLead, streamToString) lives in
+ * _helpers/api-test-harness.ts so other API test files can reuse it.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { NextRequest } from "next/server";
-import path from "path";
-import fs from "fs";
-import os from "os";
+import { setupApiTestHarness, streamToString } from "./_helpers/api-test-harness";
 
-const TMP_DB = path.join(os.tmpdir(), `paradise-itest-${Date.now()}-${process.pid}.db`);
-process.env.DATABASE_PATH = TMP_DB;
+const { seedLead } = await setupApiTestHarness();
 
-// Imports MUST come after DATABASE_PATH is set so the singleton picks it up.
-const { getDb, resetDb, upsertLead } = await import("@/lib/db");
-const { _resetRateLimits } = await import("@/lib/rate-limit");
 const exportRoute = await import("@/app/api/export/route");
 const leadsRoute = await import("@/app/api/leads/route");
 const uploadRoute = await import("@/app/api/upload/route");
-
-beforeAll(() => {
-  // Trigger schema creation
-  getDb();
-});
-
-afterAll(() => {
-  resetDb();
-  for (const ext of ["", "-shm", "-wal"]) {
-    try { fs.unlinkSync(TMP_DB + ext); } catch { /* */ }
-  }
-});
-
-beforeEach(() => {
-  _resetRateLimits();
-  const db = getDb();
-  // Wipe between tests so each starts clean. Disable FK enforcement
-  // temporarily so we can drop in any order without worrying about
-  // dependent rows in linkedin_data / scraped_content / etc.
-  db.pragma("foreign_keys = OFF");
-  const tables = db
-    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
-    .all() as { name: string }[];
-  for (const { name } of tables) {
-    db.exec(`DELETE FROM "${name}"`);
-  }
-  db.pragma("foreign_keys = ON");
-});
-
-let seedCounter = 0;
-function seedLead(overrides: Partial<{ place_id: string; business_name: string; status: string; source: string }> = {}) {
-  seedCounter++;
-  const id = seedCounter;
-  const placeId = overrides.place_id ?? `place-${id}`;
-  // Each lead must have a unique business_name + website so the cross-source
-  // dedup logic in upsertLead doesn't collapse them into a single row.
-  upsertLead({
-    place_id: placeId,
-    business_name: overrides.business_name ?? `Test Co ${id}`,
-    address: `${id} Main St`,
-    city: `City${id}`,
-    state: "IL",
-    zip_code: "62701",
-    phone: "555-0100",
-    website: `https://example${id}.com`,
-    google_rating: 4.5,
-    review_count: 100,
-    source: overrides.source ?? "google_maps",
-  } as Record<string, unknown>);
-  // upsertLead always sets enrichment_status='pending' on insert and uses
-  // `source` only for new rows; force the test fixture's intended values.
-  if (overrides.status || overrides.source) {
-    getDb().prepare(
-      `UPDATE leads SET
-        enrichment_status = COALESCE(?, enrichment_status),
-        source = COALESCE(?, source)
-       WHERE place_id = ?`
-    ).run(overrides.status ?? null, overrides.source ?? null, placeId);
-  }
-}
 
 // ─── /api/leads ─────────────────────────────────────────────────────────────
 
@@ -139,18 +76,6 @@ describe("PATCH /api/leads", () => {
 });
 
 // ─── /api/export ────────────────────────────────────────────────────────────
-
-async function streamToString(stream: ReadableStream<Uint8Array>): Promise<string> {
-  const reader = stream.getReader();
-  const dec = new TextDecoder();
-  let out = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    out += dec.decode(value);
-  }
-  return out;
-}
 
 describe("GET /api/export", () => {
   it("streams CSV with header row + lead rows", async () => {
