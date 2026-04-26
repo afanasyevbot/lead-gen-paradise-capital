@@ -3,3 +3,12 @@ node_modules/
 .env
 .env.local
 .env.production
+
+# SQLite databases (lead data, never commit)
+*.db
+*.db-shm
+*.db-wal
+*.db.bak*
+
+# Build artifacts
+tsconfig.tsbuildinfo
