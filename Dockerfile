@@ -39,6 +39,14 @@ ENV SENTRY_DSN=$SENTRY_DSN \
     SENTRY_AUTH_TOKEN=$SENTRY_AUTH_TOKEN
 
 ENV NEXT_TELEMETRY_DISABLED=1
+
+# Diagnostic: verify Sentry build vars are populated. Prints "set"/"unset" only,
+# never the value. Remove after sourcemap upload is confirmed working.
+RUN echo "SENTRY_DSN: $([ -n \"$SENTRY_DSN\" ] && echo set || echo unset)" && \
+    echo "SENTRY_ORG: ${SENTRY_ORG:-unset}" && \
+    echo "SENTRY_PROJECT: ${SENTRY_PROJECT:-unset}" && \
+    echo "SENTRY_AUTH_TOKEN: $([ -n \"$SENTRY_AUTH_TOKEN\" ] && echo set || echo unset)"
+
 RUN npm run build
 
 # ── Production ────────────────────────────────────────────────────────────
