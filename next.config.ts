@@ -12,6 +12,10 @@ const nextConfig: NextConfig = {
 };
 
 export default withSentryConfig(nextConfig, {
-  silent: true,
-  // org/project filled in via SENTRY_ORG, SENTRY_PROJECT, SENTRY_AUTH_TOKEN env vars
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  // Loud during CI/Railway builds so source-map upload failures surface in logs.
+  silent: !process.env.CI && !process.env.RAILWAY_ENVIRONMENT,
+  disableLogger: true,
 });
