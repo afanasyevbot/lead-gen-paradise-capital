@@ -26,6 +26,18 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+# Sentry source-map upload runs at build time. Declare ARGs so Railway passes
+# the service variables into the build, then promote to ENV so the @sentry/nextjs
+# plugin invoked by `next build` can read them and upload sourcemaps.
+ARG SENTRY_DSN
+ARG SENTRY_ORG
+ARG SENTRY_PROJECT
+ARG SENTRY_AUTH_TOKEN
+ENV SENTRY_DSN=$SENTRY_DSN \
+    SENTRY_ORG=$SENTRY_ORG \
+    SENTRY_PROJECT=$SENTRY_PROJECT \
+    SENTRY_AUTH_TOKEN=$SENTRY_AUTH_TOKEN
+
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
