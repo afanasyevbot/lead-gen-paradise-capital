@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import Database from "better-sqlite3";
 import { JobStore } from "@/infrastructure/jobs/store";
 
@@ -60,13 +60,20 @@ describe("JobStore", () => {
   });
 
   it("getRecent returns jobs in reverse chronological order", () => {
-    store.create("pipeline");
-    store.create("scrape");
-    store.create("pipeline");
-    const recent = store.getRecent(2);
-    expect(recent).toHaveLength(2);
-    // Most recent first
-    expect(recent[0].type).toBe("pipeline");
+    vi.useFakeTimers();
+    try {
+      store.create("pipeline");
+      vi.advanceTimersByTime(1);
+      store.create("scrape");
+      vi.advanceTimersByTime(1);
+      store.create("pipeline");
+      const recent = store.getRecent(2);
+      expect(recent).toHaveLength(2);
+      // Most recent first
+      expect(recent[0].type).toBe("pipeline");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("cleanup removes old completed jobs", () => {
