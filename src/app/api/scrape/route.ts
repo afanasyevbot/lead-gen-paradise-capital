@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
     // and Google rate-limits aggressively. Refuse the request rather than
     // queueing so the caller knows to wait.
     try {
-      acquireLock("scrape");
+      acquireLock("scrape", "scrape");
     } catch (e) {
       return NextResponse.json({ error: String(e) }, { status: 409 });
     }
@@ -158,7 +158,7 @@ export async function POST(req: NextRequest) {
       } catch (e) {
         failJob(job.id, String(e));
       } finally {
-        releaseLock();
+        releaseLock("scrape");
       }
     })();
 

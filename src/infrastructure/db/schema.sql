@@ -186,3 +186,22 @@ CREATE TABLE IF NOT EXISTS founder_emails (
 );
 
 CREATE INDEX IF NOT EXISTS idx_founder_emails_lead_id ON founder_emails(lead_id);
+
+-- ─── Dedup Log (visibility into cross-query / cross-source deduplication) ────
+-- Written by upsertLead whenever an incoming lead matches an existing row.
+-- Lets you see: how many raw scrape hits were duplicates, which query/location
+-- produced them, and whether they matched by place_id or normalized key.
+
+CREATE TABLE IF NOT EXISTS dedup_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  existing_lead_id INTEGER NOT NULL REFERENCES leads(id),
+  business_name TEXT NOT NULL,
+  matched_by TEXT NOT NULL CHECK (matched_by IN ('place_id', 'normalized_key')),
+  incoming_query TEXT,
+  incoming_location TEXT,
+  incoming_source TEXT,
+  ts TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_dedup_log_lead_id ON dedup_log(existing_lead_id);
+CREATE INDEX IF NOT EXISTS idx_dedup_log_ts ON dedup_log(ts);

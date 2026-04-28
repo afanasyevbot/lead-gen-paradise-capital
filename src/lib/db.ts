@@ -559,6 +559,7 @@ export function upsertLead(lead: Record<string, unknown>): boolean {
   let existing = db
     .prepare("SELECT id FROM leads WHERE place_id = ?")
     .get(lead.place_id as string) as { id: number } | undefined;
+  let matchedBy: "place_id" | "normalized_key" | null = existing ? "place_id" : null;
 
   // Secondary dedup: normalized key (collapses cross-source duplicates —
   // e.g. same business from Google Maps AND LinkedIn X-Ray).
@@ -581,7 +582,10 @@ export function upsertLead(lead: Record<string, unknown>): boolean {
           String(lead.business_name || "").toLowerCase().trim(),
           String(lead.city || "").toLowerCase().trim(),
         ) as { id: number; place_id: string } | undefined;
-      if (byKey) existing = { id: byKey.id };
+      if (byKey) {
+        existing = { id: byKey.id };
+        matchedBy = "normalized_key";
+      }
     }
   }
 
@@ -604,6 +608,20 @@ export function upsertLead(lead: Record<string, unknown>): boolean {
       now, JSON.stringify(lead.raw_data ?? {}), now,
       lead.place_id,
     );
+    // Log the duplicate so callers can see cross-query / cross-source overlap.
+    try {
+      db.prepare(`
+        INSERT INTO dedup_log (existing_lead_id, business_name, matched_by, incoming_query, incoming_location, incoming_source)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        existing.id,
+        String(lead.business_name || ""),
+        matchedBy!,
+        (lead.search_query as string | null) ?? null,
+        (lead.search_location as string | null) ?? null,
+        (lead.source as string | null) ?? null,
+      );
+    } catch { /* dedup_log write failure is non-fatal */ }
     return false;
   }
 

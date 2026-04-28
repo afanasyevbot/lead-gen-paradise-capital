@@ -1,50 +1,57 @@
 /**
- * Pipeline execution lock — prevents concurrent pipeline runs.
+ * Named execution locks — prevents concurrent runs of the same job type.
  *
- * Uses a single DB row as a mutex. SQLite's serialized writes guarantee
- * atomicity. Any route that launches a background pipeline job must:
- *   1. Call acquireLock() — throws if already locked
- *   2. Call releaseLock() in a finally block when done
+ * Uses one DB row per lock category ("pipeline", "scrape") so scraping and
+ * enrichment pipelines can run simultaneously without blocking each other.
+ * SQLite's serialized writes + BEGIN IMMEDIATE guarantee atomic acquire.
+ *
+ * Usage:
+ *   acquireLock("cost-aware-pipeline")          // uses "pipeline" slot
+ *   acquireLock("scrape", "scrape")              // uses "scrape" slot
+ *   releaseLock("scrape")                        // releases "scrape" slot
  */
 import { getDb } from "@/lib/db";
 import { lastJobHeartbeatAt } from "@/lib/jobs";
 
-const STALE_LOCK_MINUTES = 30; // any lock older than 30 min is assumed crashed
-const STALE_HEARTBEAT_MINUTES = 5; // no progress update in 5 min = stuck
+const STALE_LOCK_MINUTES = 30;
+const STALE_HEARTBEAT_MINUTES = 5;
+
+// Two independent lock slots — scraping and enrichment don't share resources.
+export type LockKey = "pipeline" | "scrape";
 
 const LOCK_TABLE = `
   CREATE TABLE IF NOT EXISTS pipeline_lock (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
+    lock_key TEXT PRIMARY KEY,
     locked INTEGER NOT NULL DEFAULT 0,
     locked_by TEXT,
     locked_at TEXT
   )
 `;
 
-function ensureLockTable() {
-  const db = getDb();
+function ensureLockRow(db: ReturnType<typeof getDb>, lockKey: LockKey) {
   db.exec(LOCK_TABLE);
-  const row = db.prepare("SELECT id FROM pipeline_lock WHERE id = 1").get();
+  const row = db.prepare("SELECT lock_key FROM pipeline_lock WHERE lock_key = ?").get(lockKey);
   if (!row) {
-    db.prepare("INSERT INTO pipeline_lock (id, locked) VALUES (1, 0)").run();
+    db.prepare("INSERT INTO pipeline_lock (lock_key, locked) VALUES (?, 0)").run(lockKey);
   }
 }
 
-export function acquireLock(pipelineName: string): void {
-  ensureLockTable();
-  const db = getDb();
+/** Derive lock slot from the pipeline name — all enrichment pipelines share one slot. */
+function resolveLockKey(pipelineName: string, explicitKey?: LockKey): LockKey {
+  if (explicitKey) return explicitKey;
+  return pipelineName === "scrape" ? "scrape" : "pipeline";
+}
 
-  // Wrap stale-detection + acquire in a single IMMEDIATE transaction so two
-  // concurrent acquirers can't both observe a stale lock and both succeed.
-  // BEGIN IMMEDIATE takes a RESERVED lock on the DB, serializing writers.
-  const acquire = db.transaction((name: string) => {
-    // Auto-release stale locks before trying to acquire. Two criteria:
-    //   1. Hard ceiling: lock older than STALE_LOCK_MINUTES (assume crashed)
-    //   2. Heartbeat-based: no job progress update in STALE_HEARTBEAT_MINUTES
-    //      (catches pipelines killed mid-stage where finally never ran)
-    const existing = db.prepare("SELECT locked, locked_by, locked_at FROM pipeline_lock WHERE id = 1").get() as
-      | { locked: number; locked_by: string | null; locked_at: string | null }
-      | undefined;
+export function acquireLock(pipelineName: string, lockKey?: LockKey): void {
+  const db = getDb();
+  const key = resolveLockKey(pipelineName, lockKey);
+  ensureLockRow(db, key);
+
+  const acquire = db.transaction((name: string, k: LockKey) => {
+    const existing = db.prepare(
+      "SELECT locked, locked_by, locked_at FROM pipeline_lock WHERE lock_key = ?"
+    ).get(k) as { locked: number; locked_by: string | null; locked_at: string | null } | undefined;
+
     if (existing?.locked === 1 && existing.locked_at) {
       const lockAgeMin = (Date.now() - new Date(existing.locked_at).getTime()) / 60000;
       let shouldRelease = false;
@@ -62,54 +69,56 @@ export function acquireLock(pipelineName: string): void {
             reason = `heartbeat silent for ${Math.round(hbAgeMin)}min > ${STALE_HEARTBEAT_MINUTES}min`;
           }
         } else if (lockAgeMin > STALE_HEARTBEAT_MINUTES) {
-          // Lock held but no running job exists at all → definitely stale
           shouldRelease = true;
           reason = `no running job record, lock ${Math.round(lockAgeMin)}min old`;
         }
       }
 
       if (shouldRelease) {
-        console.warn(`[PIPELINE LOCK] Auto-releasing "${existing.locked_by}" — ${reason}`);
-        // Release inline within the transaction so the UPDATE below sees locked=0.
-        db.prepare("UPDATE pipeline_lock SET locked = 0, locked_by = NULL, locked_at = NULL WHERE id = 1").run();
+        console.warn(`[PIPELINE LOCK:${k}] Auto-releasing "${existing.locked_by}" — ${reason}`);
+        db.prepare(
+          "UPDATE pipeline_lock SET locked = 0, locked_by = NULL, locked_at = NULL WHERE lock_key = ?"
+        ).run(k);
       }
     }
 
     const result = db.prepare(`
       UPDATE pipeline_lock
       SET locked = 1, locked_by = ?, locked_at = datetime('now')
-      WHERE id = 1 AND locked = 0
-    `).run(name);
+      WHERE lock_key = ? AND locked = 0
+    `).run(name, k);
 
     return result.changes;
   }).immediate;
 
-  const changes = acquire(pipelineName);
+  const changes = acquire(pipelineName, key);
 
   if (changes === 0) {
-    const current = db.prepare("SELECT locked_by, locked_at FROM pipeline_lock WHERE id = 1").get() as
-      | { locked_by: string; locked_at: string }
-      | undefined;
+    const current = db.prepare(
+      "SELECT locked_by, locked_at FROM pipeline_lock WHERE lock_key = ?"
+    ).get(key) as { locked_by: string; locked_at: string } | undefined;
     throw new Error(
-      `Pipeline already running: "${current?.locked_by}" started at ${current?.locked_at}. Wait for it to finish or restart the server.`
+      `[${key}] Already running: "${current?.locked_by}" started at ${current?.locked_at}. Wait for it to finish or restart the server.`
     );
   }
 }
 
-export function releaseLock(): void {
+export function releaseLock(lockKey: LockKey = "pipeline"): void {
   try {
     const db = getDb();
-    db.prepare("UPDATE pipeline_lock SET locked = 0, locked_by = NULL, locked_at = NULL WHERE id = 1").run();
+    db.prepare(
+      "UPDATE pipeline_lock SET locked = 0, locked_by = NULL, locked_at = NULL WHERE lock_key = ?"
+    ).run(lockKey);
   } catch {
-    // Best-effort — don't crash on lock release failure
+    // Best-effort
   }
 }
 
-export function isLocked(): boolean {
+export function isLocked(lockKey: LockKey = "pipeline"): boolean {
   try {
-    ensureLockTable();
     const db = getDb();
-    const row = db.prepare("SELECT locked FROM pipeline_lock WHERE id = 1").get() as
+    ensureLockRow(db, lockKey);
+    const row = db.prepare("SELECT locked FROM pipeline_lock WHERE lock_key = ?").get(lockKey) as
       | { locked: number }
       | undefined;
     return row?.locked === 1;
@@ -118,7 +127,7 @@ export function isLocked(): boolean {
   }
 }
 
-export function getLockStatus(): {
+export function getLockStatus(lockKey: LockKey = "pipeline"): {
   locked: boolean;
   lockedBy: string | null;
   lockedAt: string | null;
@@ -126,9 +135,11 @@ export function getLockStatus(): {
   ageMinutes: number | null;
 } {
   try {
-    ensureLockTable();
     const db = getDb();
-    const row = db.prepare("SELECT locked, locked_by, locked_at FROM pipeline_lock WHERE id = 1").get() as
+    ensureLockRow(db, lockKey);
+    const row = db.prepare(
+      "SELECT locked, locked_by, locked_at FROM pipeline_lock WHERE lock_key = ?"
+    ).get(lockKey) as
       | { locked: number; locked_by: string | null; locked_at: string | null }
       | undefined;
 
@@ -136,7 +147,6 @@ export function getLockStatus(): {
       return { locked: false, lockedBy: null, lockedAt: null, isStale: false, ageMinutes: null };
     }
 
-    // Fix #10: Detect and auto-release stale locks from crashed pipelines
     let ageMinutes: number | null = null;
     let isStale = false;
     if (row.locked_at) {
@@ -144,9 +154,9 @@ export function getLockStatus(): {
       isStale = ageMinutes > STALE_LOCK_MINUTES;
       if (isStale) {
         console.warn(
-          `[PIPELINE LOCK] Stale lock detected — "${row.locked_by}" locked ${Math.round(ageMinutes)}min ago. Auto-releasing.`
+          `[PIPELINE LOCK:${lockKey}] Stale lock "${row.locked_by}" (${Math.round(ageMinutes)}min) — auto-releasing.`
         );
-        releaseLock();
+        releaseLock(lockKey);
         return { locked: false, lockedBy: row.locked_by, lockedAt: row.locked_at, isStale: true, ageMinutes };
       }
     }
