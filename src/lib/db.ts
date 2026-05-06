@@ -68,6 +68,29 @@ function runMigrations(db: Database.Database) {
     try { db.exec("ALTER TABLE scraped_content ADD COLUMN phones_found TEXT"); }
     catch (e) { console.warn("[DB MIGRATE] add phones_found failed:", e); }
   }
+
+  // Migrate pipeline_lock: old schema had `id INTEGER` PK with hardcoded id=1.
+  // New schema uses `lock_key TEXT` PK so scrape and pipeline can run
+  // independently. SQLite can't ALTER PRIMARY KEY, so we drop and recreate.
+  // Lock data is ephemeral (just a mutex) — safe to recreate.
+  if (!hasColumn("pipeline_lock", "lock_key")) {
+    try {
+      db.exec(`
+        DROP TABLE IF EXISTS pipeline_lock;
+        CREATE TABLE pipeline_lock (
+          lock_key TEXT PRIMARY KEY,
+          locked INTEGER NOT NULL DEFAULT 0,
+          locked_by TEXT,
+          locked_at TEXT
+        );
+        INSERT INTO pipeline_lock (lock_key, locked) VALUES ('pipeline', 0);
+        INSERT INTO pipeline_lock (lock_key, locked) VALUES ('scrape', 0);
+      `);
+      console.log("[DB MIGRATE] pipeline_lock upgraded to named-key schema");
+    } catch (e) {
+      console.warn("[DB MIGRATE] pipeline_lock upgrade failed:", e);
+    }
+  }
 }
 
 // Inline fallback — kept in sync with infrastructure/db/schema.sql
