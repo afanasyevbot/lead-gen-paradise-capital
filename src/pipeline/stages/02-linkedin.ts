@@ -12,6 +12,8 @@ export const linkedinStage: PipelineStage = {
     return {
       linkedin_found: result.found,
       linkedin_not_found: result.not_found,
+      linkedin_failed: result.failed,
+      linkedin_skipped: result.skipped,
     };
   },
 };

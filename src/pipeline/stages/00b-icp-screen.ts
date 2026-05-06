@@ -30,6 +30,65 @@ ICP MATCH = false if ANY of:
 - Clearly PE-backed, recently acquired, or already through an exit
 - Owner is clearly a hired professional manager or second-generation, not the original founder`;
 
+/**
+ * Tolerant parser for Haiku's ICP response.
+ *
+ * Strategy:
+ *  1. Strip markdown code fences
+ *  2. Try strict JSON.parse
+ *  3. Fall back to extracting `{...}` substring (longest brace-balanced span)
+ *  4. Last resort: regex scan for `"match": true|false`
+ *
+ * Returns null only if no signal can be recovered.
+ */
+export function parseIcpResponse(raw: string): { match: boolean; reason: string } | null {
+  const cleaned = raw
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```\s*$/i, "")
+    .trim();
+
+  // Strict parse
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (typeof parsed?.match === "boolean") {
+      return { match: parsed.match, reason: String(parsed.reason ?? "") };
+    }
+  } catch { /* fall through */ }
+
+  // Extract first balanced {...} substring
+  const start = cleaned.indexOf("{");
+  if (start !== -1) {
+    let depth = 0;
+    for (let i = start; i < cleaned.length; i++) {
+      if (cleaned[i] === "{") depth++;
+      else if (cleaned[i] === "}") {
+        depth--;
+        if (depth === 0) {
+          try {
+            const parsed = JSON.parse(cleaned.slice(start, i + 1));
+            if (typeof parsed?.match === "boolean") {
+              return { match: parsed.match, reason: String(parsed.reason ?? "") };
+            }
+          } catch { /* fall through to regex */ }
+          break;
+        }
+      }
+    }
+  }
+
+  // Regex fallback — pick up "match": true|false even from broken JSON
+  const m = cleaned.match(/["']?match["']?\s*:\s*(true|false)/i);
+  if (m) {
+    const reasonMatch = cleaned.match(/["']?reason["']?\s*:\s*"([^"]+)"/);
+    return {
+      match: m[1].toLowerCase() === "true",
+      reason: reasonMatch?.[1] ?? "(extracted from malformed JSON)",
+    };
+  }
+
+  return null;
+}
+
 export const icpScreenStage: PipelineStage = {
   name: "icp-screen",
   description: "Haiku ICP screening",
@@ -84,41 +143,58 @@ export const icpScreenStage: PipelineStage = {
         .filter(Boolean)
         .join("\n");
 
-      try {
-        const response = await client.messages.create({
-          model: "claude-haiku-4-5",
-          max_tokens: 80,
-          system: ICP_SCREEN_PROMPT,
-          messages: [{ role: "user", content: input }],
-        });
+      let result: { match: boolean; reason: string } | null = null;
+      let lastResponseText = "";
 
-        const text =
-          response.content[0].type === "text" ? response.content[0].text.trim() : "";
-
-        let result: { match: boolean; reason: string } | null = null;
+      // Up to 2 attempts: original prompt, then a retry with a stricter reminder.
+      for (let attempt = 1; attempt <= 2 && !result; attempt++) {
         try {
-          result = JSON.parse(text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim());
-        } catch {
-          result = null;
-        }
+          const messages: { role: "user" | "assistant"; content: string }[] = [
+            { role: "user", content: input },
+          ];
+          if (attempt === 2) {
+            // Steer the retry: pre-fill assistant with `{` so the next token
+            // must be a JSON key. Forces structured output even when the model
+            // wanted to ramble.
+            messages.push({ role: "assistant", content: "{" });
+          }
 
-        if (result && result.match === true) {
-          // Keep as 'scraped' — extract stage picks it up
-          matched++;
-        } else if (result && result.match === false) {
-          setLeadStatus(lead.id, "icp_rejected");
-          rejected++;
-        } else {
-          // Fail CLOSED — we don't know, mark for manual review rather than
-          // spending extraction budget on something Haiku couldn't classify.
-          setLeadStatus(lead.id, "icp_parse_error");
-          errored++;
+          const response = await client.messages.create({
+            model: "claude-haiku-4-5",
+            max_tokens: 80,
+            system: ICP_SCREEN_PROMPT,
+            messages,
+          });
+
+          let text =
+            response.content[0].type === "text" ? response.content[0].text.trim() : "";
+
+          // If we pre-filled "{", prepend it back to the response.
+          if (attempt === 2) text = "{" + text;
+          lastResponseText = text;
+
+          result = parseIcpResponse(text);
+        } catch (err) {
+          console.warn(`[ICP_SCREEN] API error attempt ${attempt} for lead ${lead.id}:`, String(err));
+          // Don't retry on API errors — those are network/quota, not parse issues.
+          if (attempt === 1) {
+            setLeadStatus(lead.id, "icp_screen_error");
+            errored++;
+            break;
+          }
         }
-      } catch (err) {
-        // API error — fail closed too. Otherwise transient outages silently
-        // pass through everything and burn the extraction budget.
-        console.warn(`[ICP_SCREEN] API error for lead ${lead.id}:`, String(err));
-        setLeadStatus(lead.id, "icp_screen_error");
+      }
+
+      if (result && result.match === true) {
+        matched++;
+      } else if (result && result.match === false) {
+        setLeadStatus(lead.id, "icp_rejected");
+        rejected++;
+      } else if (lastResponseText) {
+        // Both attempts failed to produce parseable JSON — fail closed and
+        // log the raw text so we can post-mortem what Haiku actually said.
+        console.warn(`[ICP_SCREEN] parse failed for lead ${lead.id}, raw: ${lastResponseText.slice(0, 200)}`);
+        setLeadStatus(lead.id, "icp_parse_error");
         errored++;
       }
     }

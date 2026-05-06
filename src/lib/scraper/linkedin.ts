@@ -196,9 +196,21 @@ export async function findLinkedInProfiles(
     });
 
     let batchRateLimited = false;
+    let consecutiveRateLimits = 0; // bail if Google is fully blocking us
+    const MAX_CONSECUTIVE_RATE_LIMITS = 5;
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       onProgress?.(i + 1, rows.length, row.business_name);
+
+      // Bail if we've been rate-limited on 5 consecutive leads — Google is
+      // persistently blocking, no point burning more time.
+      if (consecutiveRateLimits >= MAX_CONSECUTIVE_RATE_LIMITS) {
+        console.warn(
+          `[LinkedIn] ${MAX_CONSECUTIVE_RATE_LIMITS} consecutive rate-limits — Google is blocking. Skipping remaining ${rows.length - i} leads.`
+        );
+        counts.skipped += rows.length - i;
+        break;
+      }
 
       // Anti-detection: random delay between LinkedIn searches (skip first)
       if (i > 0) {
@@ -238,11 +250,15 @@ export async function findLinkedInProfiles(
               await new Promise((r) => setTimeout(r, backoff));
               continue;
             } else {
+              // Skip this lead, but continue processing the rest. Only fully
+              // bail if we hit consecutive rate-limits across multiple leads
+              // (handled by the consecutiveRateLimits counter below).
               console.warn(
-                `[LinkedIn] Google rate limit persists after ${MAX_SEARCH_RETRIES} retries. Skipping remaining leads.`
+                `[LinkedIn] Rate limit persists for "${row.business_name}" after ${MAX_SEARCH_RETRIES} retries. Skipping this lead.`
               );
-              counts.failed++;
-              return counts;
+              counts.skipped++;
+              consecutiveRateLimits++;
+              break;
             }
           }
 
@@ -289,6 +305,8 @@ export async function findLinkedInProfiles(
         } else {
           counts.not_found++;
         }
+        // Reset consecutive rate-limit counter on any successful response.
+        consecutiveRateLimits = 0;
 
         // Delay between searches to avoid Google rate limiting (2-4 seconds with jitter)
         const delay = 2000 + Math.random() * 2000;
