@@ -17,7 +17,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.92.0",
+    "@anthropic-ai/sdk": "^0.95.1",
     "@sentry/nextjs": "^10.50.0",
     "better-sqlite3": "^12.8.0",
     "lucide-react": "^1.11.0",
